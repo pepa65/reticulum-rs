@@ -1,14 +1,13 @@
-use core::mem::size_of;
+use core::cmp;
+use core::convert::From;
 
 use aes::cipher::block_padding::Pkcs7;
 use aes::cipher::BlockDecryptMut;
-use aes::cipher::Iv;
 use aes::cipher::Key;
 use aes::cipher::Unsigned;
 use cbc::cipher::BlockEncryptMut;
 use cbc::cipher::KeyIvInit;
-use crypto_common::KeyInit;
-use crypto_common::KeySizeUser;
+use crypto_common::{IvSizeUser, KeyInit, KeySizeUser, OutputSizeUser};
 use hmac::Mac;
 use rand_core::CryptoRngCore;
 use sha2::Sha256;
@@ -20,12 +19,32 @@ type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
 type HmacSha256 = hmac::Hmac<Sha256>;
 
 const HMAC_KEY_SIZE: usize = <<HmacSha256 as KeySizeUser>::KeySize as Unsigned>::USIZE;
+const HMAC_OUT_SIZE: usize = <<HmacSha256 as OutputSizeUser>::OutputSize as Unsigned>::USIZE;
 const AES_KEY_SIZE: usize = <<aes::Aes128 as KeySizeUser>::KeySize as Unsigned>::USIZE;
+const IV_KEY_SIZE: usize = <<Aes128CbcEnc as IvSizeUser>::IvSize as Unsigned>::USIZE;
+const FERNET_OVERHEAD_SIZE: usize = IV_KEY_SIZE + HMAC_OUT_SIZE;
 
+pub struct PlainText<'a>(&'a [u8]);
+pub struct VerifiedToken<'a>(&'a [u8]);
+pub struct Token<'a>(&'a [u8]);
+
+// This class provides a slightly modified implementation of the Fernet spec
+// found at: https://github.com/fernet/spec/blob/master/Spec.md
+//
+// According to the spec, a Fernet token includes a one byte VERSION and
+// eight byte TIMESTAMP field at the start of each token. These fields are
+// not relevant to Reticulum. They are therefore stripped from this
+// implementation, since they incur overhead and leak initiator metadata.
 pub struct Fernet<R: CryptoRngCore> {
     rng: R,
     sign_key: Key<HmacSha256>,
     enc_key: Key<aes::Aes128>,
+}
+
+impl<'a> From<&'a str> for PlainText<'a> {
+    fn from(item: &'a str) -> Self {
+        Self { 0: item.as_bytes() }
+    }
 }
 
 impl<R: CryptoRngCore> Fernet<R> {
@@ -62,65 +81,131 @@ impl<R: CryptoRngCore> Fernet<R> {
 
     pub fn encrypt<'a>(
         &mut self,
-        msg: &[u8],
+        text: PlainText,
         out_buf: &'a mut [u8],
-    ) -> Result<&'a mut [u8], RnsError> {
-        // Generate random IV
-        let iv = Aes128CbcEnc::generate_iv(&mut self.rng);
-
-        let mut out_len = 0;
-
-        if out_buf.len() < (out_len + iv.len()) {
+    ) -> Result<Token<'a>, RnsError> {
+        if out_buf.len() <= FERNET_OVERHEAD_SIZE {
             return Err(RnsError::InvalidArgument);
         }
 
+        let mut out_len = 0;
+
+        // Generate random IV
+        let iv = Aes128CbcEnc::generate_iv(&mut self.rng);
         out_buf[..iv.len()].copy_from_slice(iv.as_slice());
 
         out_len += iv.len();
 
         let chiper_len = Aes128CbcEnc::new(&self.enc_key, &iv)
-            .encrypt_padded_b2b_mut::<Pkcs7>(msg, &mut out_buf[out_len..])
+            .encrypt_padded_b2b_mut::<Pkcs7>(text.0, &mut out_buf[out_len..])
             .unwrap()
             .len();
 
         out_len += chiper_len;
 
-        let mut mac = <HmacSha256 as KeyInit>::new(&self.sign_key);
-        mac.update(&out_buf[..out_len]);
+        let tag = <HmacSha256 as KeyInit>::new(&self.sign_key)
+            .chain_update(&out_buf[..out_len])
+            .finalize()
+            .into_bytes();
 
-        let tag = mac.finalize().into_bytes();
         out_buf[out_len..out_len + tag.len()].copy_from_slice(tag.as_slice());
+        out_len += tag.len();
 
-        Ok(&mut out_buf[..out_len])
+        Ok(Token {
+            0: &out_buf[..out_len],
+        })
     }
 
-    pub fn verify(&mut self, msg: &[u8]) -> Result<(), RnsError> {
-        if msg.len() <= HMAC_KEY_SIZE {
+    pub fn verify<'a>(&mut self, token: Token<'a>) -> Result<VerifiedToken<'a>, RnsError> {
+        let token_data = token.0;
+
+        if token_data.len() <= FERNET_OVERHEAD_SIZE {
             return Err(RnsError::InvalidArgument);
         }
 
-        let mut mac = <HmacSha256 as KeyInit>::new(&self.sign_key);
-        mac.update(&msg[..]);
+        let expected_tag = &token_data[token_data.len() - HMAC_OUT_SIZE..];
 
-        let tag = mac.finalize().into_bytes();
+        let actual_tag = <HmacSha256 as KeyInit>::new(&self.sign_key)
+            .chain_update(&token_data[..token_data.len() - HMAC_OUT_SIZE])
+            .finalize()
+            .into_bytes();
 
-        Ok(())
+        let valid = expected_tag
+            .iter()
+            .zip(actual_tag.as_slice())
+            .map(|(x, y)| x.cmp(y))
+            .find(|&ord| ord != cmp::Ordering::Equal)
+            .unwrap_or(actual_tag.len().cmp(&expected_tag.len()))
+            == cmp::Ordering::Equal;
+
+        if valid {
+            Ok(VerifiedToken { 0: token_data })
+        } else {
+            Err(RnsError::IncorrectSignature)
+        }
+    }
+
+    pub fn decrypt<'a>(
+        &mut self,
+        token: VerifiedToken<'a>,
+        out_buf: &'a mut [u8],
+    ) -> Result<PlainText<'a>, RnsError> {
+        let token_data = token.0;
+
+        if token_data.len() <= FERNET_OVERHEAD_SIZE {
+            return Err(RnsError::InvalidArgument);
+        }
+
+        let tag_start_index = token_data.len() - HMAC_OUT_SIZE;
+
+        let iv: [u8; IV_KEY_SIZE] = token_data[..IV_KEY_SIZE].try_into().unwrap();
+
+        let ciphertext = &token_data[IV_KEY_SIZE..tag_start_index];
+
+        let msg = Aes128CbcDec::new(&self.enc_key, &iv.into())
+            .decrypt_padded_b2b_mut::<Pkcs7>(ciphertext, out_buf)
+            .map_err(|_| RnsError::CryptoError)?;
+
+        return Ok(PlainText { 0: msg });
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use rand_core::OsRng;
-
     use crate::crypt::fernet::Fernet;
+    use core::str;
+    use rand_core::OsRng;
 
     #[test]
     fn encrypt_then_decrypt() {
+        const BUF_SIZE: usize = 4096;
+
         let mut fernet = Fernet::new_rand(OsRng);
 
-        let msg = "#FERNET_TEST_MESSAGE#";
-        let mut out_buf = [0u8; 4096];
+        let out_msg: &str = "#FERNET_TEST_MESSAGE#";
 
-        fernet.encrypt(msg.as_bytes(), &mut out_buf[..4096]);
+        let mut out_buf = [0u8; BUF_SIZE];
+
+        let token = fernet
+            .encrypt(out_msg.into(), &mut out_buf[..])
+            .expect("cipher token");
+
+        let token = fernet.verify(token).expect("verified token");
+
+        let mut in_buf = [0u8; BUF_SIZE];
+        let in_msg = str::from_utf8(fernet.decrypt(token, &mut in_buf).expect("decoded token").0)
+            .expect("valid string");
+
+        assert_eq!(in_msg, out_msg);
+    }
+
+    #[test]
+    fn small_buffer() {
+        let mut fernet = Fernet::new_rand(OsRng);
+
+        let test_msg: &str = "#FERNET_TEST_MESSAGE#";
+
+        let mut out_buf = [0u8; 12];
+        assert!(fernet.encrypt(test_msg.into(), &mut out_buf[..]).is_err());
     }
 }
