@@ -1,9 +1,6 @@
-use crypt::fernet::Fernet;
-use rand_core::OsRng;
 
-mod crypt;
-mod error;
+pub mod crypt;
+pub mod error;
+pub mod packet;
+pub mod hash;
 
-pub fn add() {
-    let fernet = Fernet::new_rand(OsRng);
-}
