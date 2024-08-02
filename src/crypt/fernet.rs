@@ -41,9 +41,33 @@ pub struct Fernet<R: CryptoRngCore> {
     enc_key: Key<aes::Aes128>,
 }
 
+impl<'a> PlainText<'a> {
+    pub fn as_slice(&self) -> &'a [u8] {
+        self.0
+    }
+}
+
 impl<'a> From<&'a str> for PlainText<'a> {
     fn from(item: &'a str) -> Self {
         Self { 0: item.as_bytes() }
+    }
+}
+
+impl<'a> From<&'a [u8]> for PlainText<'a> {
+    fn from(item: &'a [u8]) -> Self {
+        Self { 0: item }
+    }
+}
+
+impl<'a> Token<'a> {
+    pub fn as_bytes(&self) -> &'a [u8] {
+        self.0
+    }
+}
+
+impl<'a> From<&'a [u8]> for Token<'a> {
+    fn from(item: &'a [u8]) -> Self {
+        Self { 0: item }
     }
 }
 
@@ -56,15 +80,17 @@ impl<R: CryptoRngCore> Fernet<R> {
         }
     }
 
-    pub fn new_from_slices(
-        sign_key: [u8; HMAC_KEY_SIZE],
-        enc_key: [u8; AES_KEY_SIZE],
-        rng: R,
-    ) -> Self {
+    pub fn new_from_slices(sign_key: &[u8], enc_key: &[u8], rng: R) -> Self {
+        let mut sign_key_bytes = [0u8; HMAC_KEY_SIZE];
+        sign_key_bytes[..cmp::min(HMAC_OUT_SIZE, sign_key.len())].copy_from_slice(sign_key);
+
+        let mut enc_key_bytes = [0u8; AES_KEY_SIZE];
+        enc_key_bytes[..cmp::min(AES_KEY_SIZE, enc_key.len())].copy_from_slice(enc_key);
+
         Self {
             rng,
-            sign_key: sign_key.into(),
-            enc_key: enc_key.into(),
+            sign_key: sign_key_bytes.into(),
+            enc_key: enc_key_bytes.into(),
         }
     }
 
@@ -145,11 +171,11 @@ impl<R: CryptoRngCore> Fernet<R> {
         }
     }
 
-    pub fn decrypt<'a>(
+    pub fn decrypt<'a, 'b>(
         &mut self,
         token: VerifiedToken<'a>,
-        out_buf: &'a mut [u8],
-    ) -> Result<PlainText<'a>, RnsError> {
+        out_buf: &'b mut [u8],
+    ) -> Result<PlainText<'b>, RnsError> {
         let token_data = token.0;
 
         if token_data.len() <= FERNET_OVERHEAD_SIZE {

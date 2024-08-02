@@ -73,18 +73,6 @@ pub struct Header {
     pub hops: u8,
 }
 
-impl Header {
-    pub fn pack(&self) -> [u8; 2] {
-        let meta = (self.ifac_flag as u8) << 7
-            | (self.header_type as u8) << 6
-            | (self.propagation_type as u8) << 4
-            | (self.destination_type as u8) << 2
-            | (self.packet_type as u8) << 0;
-
-        [meta, self.hops]
-    }
-}
-
 impl fmt::Display for Header {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -109,29 +97,4 @@ pub struct Packet<'a> {
     pub data: &'a [u8],
 }
 
-impl Packet {
-
-}
-
-#[cfg(test)]
-mod tests {
-
-    use crate::packet::{
-        DestinationType, Header, HeaderType, IfacFlag, PacketType, PropagationType,
-    };
-
-    #[test]
-    fn print_header() {
-        let header = Header {
-            ifac_flag: IfacFlag::Authenticated,
-            header_type: HeaderType::Type2,
-            propagation_type: PropagationType::Transport,
-            destination_type: DestinationType::Group,
-            packet_type: PacketType::Announce,
-            hops: 7u8,
-        };
-
-        println!("{}", header.to_string());
-        println!("{:0>8b} {:0>8b}", header.pack()[0], header.pack()[1]);
-    }
-}
+impl<'a> Packet<'a> {}
