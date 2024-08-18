@@ -1,6 +1,7 @@
-use rand_core::CryptoRngCore;
+use rand_core::{CryptoRngCore, OsRng};
 
 use crate::{
+    buffer::OutputBuffer,
     error::RnsError,
     hash::{AddressHash, Hash},
     identity::{
@@ -121,15 +122,42 @@ impl<'a, I: EncryptIdentity + HashIdentity, D: Direction, T: Type> Destination<'
 
 impl<'a> Destination<'a, PrivateIdentity, Input, Single> {
     pub fn new(identity: &'a PrivateIdentity, name: DestinationName<'a>) -> Self {
+        let hash = create_hash(identity, &name);
         Self {
             direction: PhantomData,
             r#type: PhantomData,
             identity,
             name,
+            hash,
         }
     }
 
-    pub fn announce<'b>(&self, buf: &'b mut [u8]) -> Result<Packet<'b>, RnsError> {}
+    pub fn announce<'b>(
+        &self,
+        app_data: Option<&[u8]>,
+        buf: &'b mut [u8],
+    ) -> Result<Packet<'b>, RnsError> {
+        let rand_hash = AddressHash::new_from_hash(&Hash::new_from_rand(OsRng));
+
+        let mut out_buf = OutputBuffer::new(buf);
+
+        out_buf.write(self.hash.as_slice())?;
+        out_buf.write(self.identity.as_identity().public_key_bytes())?;
+        out_buf.write(self.name.as_name_hash_slice())?;
+        out_buf.write(rand_hash.as_slice())?;
+
+        if let Some(data) = app_data {
+            out_buf.write(data)?;
+        }
+
+        let signature = self.identity.sign(out_buf.as_slice())?;
+
+        out_buf.reset();
+
+        out_buf.write(&signature.to_bytes())?;
+
+        Err(RnsError::IncorrectHash)
+    }
 }
 
 impl<'a> Destination<'a, Identity, Output, Single> {

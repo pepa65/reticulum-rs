@@ -4,7 +4,7 @@ use hkdf::Hkdf;
 use rand_core::{CryptoRngCore, OsRng};
 
 use ed25519_dalek::{
-    ed25519::signature::SignerMut, Signature, SigningKey, VerifyingKey, PUBLIC_KEY_LENGTH,
+    ed25519::signature::Signer, Signature, SigningKey, VerifyingKey, PUBLIC_KEY_LENGTH,
 };
 use sha2::{Digest, Sha256};
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
@@ -193,7 +193,7 @@ impl PrivateIdentity {
         self.identity.verify(data, signature)
     }
 
-    pub fn sign(&mut self, data: &[u8]) -> Result<Signature, RnsError> {
+    pub fn sign(&self, data: &[u8]) -> Result<Signature, RnsError> {
         self.sign_key
             .try_sign(data)
             .map_err(|_| RnsError::IncorrectSignature)
