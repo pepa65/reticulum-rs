@@ -3,7 +3,9 @@ use core::fmt::Debug;
 use hkdf::Hkdf;
 use rand_core::{CryptoRngCore, OsRng};
 
-use ed25519_dalek::{Signature, SigningKey, VerifyingKey, PUBLIC_KEY_LENGTH};
+use ed25519_dalek::{
+    ed25519::signature::SignerMut, Signature, SigningKey, VerifyingKey, PUBLIC_KEY_LENGTH,
+};
 use sha2::{Digest, Sha256};
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
 
@@ -12,6 +14,28 @@ use crate::{
     error::RnsError,
     hash::{AddressHash, Hash},
 };
+
+pub trait EncryptIdentity {
+    fn encrypt<'a, R: CryptoRngCore + Copy>(
+        &self,
+        rng: R,
+        text: &[u8],
+        out_buf: &'a mut [u8],
+    ) -> Result<&'a [u8], RnsError>;
+}
+
+pub trait DecryptIdentity {
+    fn decrypt<'a, R: CryptoRngCore + Copy>(
+        &self,
+        rng: R,
+        data: &[u8],
+        out_buf: &'a mut [u8],
+    ) -> Result<&'a [u8], RnsError>;
+}
+
+pub trait HashIdentity {
+    fn as_address_hash_slice(&self) -> &[u8];
+}
 
 #[derive(Copy, Clone)]
 pub struct Identity {
@@ -46,8 +70,16 @@ impl Identity {
             .verify_strict(data, signature)
             .map_err(|_| RnsError::IncorrectSignature)
     }
+}
 
-    pub fn encrypt<'a, R: CryptoRngCore + Copy>(
+impl HashIdentity for Identity {
+    fn as_address_hash_slice(&self) -> &[u8] {
+        self.address_hash.as_slice()
+    }
+}
+
+impl EncryptIdentity for Identity {
+    fn encrypt<'a, R: CryptoRngCore + Copy>(
         &self,
         rng: R,
         text: &[u8],
@@ -85,6 +117,48 @@ impl Identity {
     }
 }
 
+pub struct EmptyIdentity;
+
+impl HashIdentity for EmptyIdentity {
+    fn as_address_hash_slice(&self) -> &[u8] {
+        &[]
+    }
+}
+
+impl EncryptIdentity for EmptyIdentity {
+    fn encrypt<'a, R: CryptoRngCore + Copy>(
+        &self,
+        _rng: R,
+        text: &[u8],
+        out_buf: &'a mut [u8],
+    ) -> Result<&'a [u8], RnsError> {
+        if text.len() > out_buf.len() {
+            return Err(RnsError::OutOfMemory);
+        }
+
+        let result = &mut out_buf[..text.len()];
+        result.copy_from_slice(&text);
+        Ok(result)
+    }
+}
+
+impl DecryptIdentity for EmptyIdentity {
+    fn decrypt<'a, R: CryptoRngCore + Copy>(
+        &self,
+        _rng: R,
+        data: &[u8],
+        out_buf: &'a mut [u8],
+    ) -> Result<&'a [u8], RnsError> {
+        if data.len() > out_buf.len() {
+            return Err(RnsError::OutOfMemory);
+        }
+
+        let result = &mut out_buf[..data.len()];
+        result.copy_from_slice(&data);
+        Ok(result)
+    }
+}
+
 pub struct PrivateIdentity {
     identity: Identity,
     private_key: StaticSecret,
@@ -107,11 +181,44 @@ impl PrivateIdentity {
         Self::new(private_key, sign_key)
     }
 
-    pub fn into(&self) -> Identity {
-        self.identity
+    pub fn into(&self) -> &Identity {
+        &self.identity
     }
 
-    pub fn decrypt<'a, R: CryptoRngCore + Copy>(
+    pub fn as_identity(&self) -> &Identity {
+        &self.identity
+    }
+
+    pub fn verify(&self, data: &[u8], signature: &Signature) -> Result<(), RnsError> {
+        self.identity.verify(data, signature)
+    }
+
+    pub fn sign(&mut self, data: &[u8]) -> Result<Signature, RnsError> {
+        self.sign_key
+            .try_sign(data)
+            .map_err(|_| RnsError::IncorrectSignature)
+    }
+}
+
+impl HashIdentity for PrivateIdentity {
+    fn as_address_hash_slice(&self) -> &[u8] {
+        self.identity.address_hash.as_slice()
+    }
+}
+
+impl EncryptIdentity for PrivateIdentity {
+    fn encrypt<'a, R: CryptoRngCore + Copy>(
+        &self,
+        rng: R,
+        text: &[u8],
+        out_buf: &'a mut [u8],
+    ) -> Result<&'a [u8], RnsError> {
+        self.identity.encrypt(rng, text, out_buf)
+    }
+}
+
+impl DecryptIdentity for PrivateIdentity {
+    fn decrypt<'a, R: CryptoRngCore + Copy>(
         &self,
         rng: R,
         data: &[u8],
@@ -148,6 +255,8 @@ impl PrivateIdentity {
     }
 }
 
+pub struct GroupIdentity {}
+
 fn create_derived_key(shared_key: &SharedSecret, salt: Option<&[u8]>) -> Hash {
     let mut derived_key = Hash::new_empty();
 
@@ -162,6 +271,8 @@ mod tests {
     use core::str;
     use rand_core::OsRng;
 
+    use super::DecryptIdentity;
+    use super::EncryptIdentity;
     use super::PrivateIdentity;
 
     #[test]
