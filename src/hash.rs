@@ -77,11 +77,21 @@ impl AddressHash {
     }
 
     pub fn new_from_hash(hash: &Hash) -> Self {
-        Self::new_from_slice(&hash.0)
+        let mut address_hash = [0u8; ADDRESS_HASH_SIZE];
+        address_hash.copy_from_slice(&hash.0[0..ADDRESS_HASH_SIZE]);
+        Self { 0: address_hash }
+    }
+
+    pub fn new_from_rand<R: CryptoRngCore>(rng: R) -> Self {
+        Self::new_from_hash(&Hash::new_from_rand(rng))
     }
 
     pub fn as_slice(&self) -> &[u8] {
         &self.0[..]
+    }
+
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        &mut self.0[..]
     }
 
     pub const fn len(&self) -> usize {
@@ -91,7 +101,20 @@ impl AddressHash {
 
 impl fmt::Display for AddressHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let hash = &self.0;
-        write!(f, "{:x}{:x}{:x}{:x}", hash[0], hash[1], hash[2], hash[3])
+        for data in self.0.iter() {
+            write!(f, "{:0>2x}", data)?;
+        }
+
+        Ok(())
+    }
+}
+
+impl fmt::Display for Hash {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        for data in self.0.iter() {
+            write!(f, "{:0>2x}", data)?;
+        }
+
+        Ok(())
     }
 }

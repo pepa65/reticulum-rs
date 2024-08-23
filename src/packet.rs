@@ -77,7 +77,7 @@ impl fmt::Display for Header {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{:b} {:b} {:0>2b} {:0>2b} {:0>2b} {:0>8b}",
+            "{:b}{:b}{:0>2b}{:0>2b}{:0>2b}{:0>8b}",
             self.ifac_flag as u8,
             self.header_type as u8,
             self.propagation_type as u8,
@@ -98,3 +98,19 @@ pub struct Packet<'a> {
 }
 
 impl<'a> Packet<'a> {}
+
+impl<'a> fmt::Display for Packet<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "/{}", self.header)?;
+
+        write!(f, " 0x{}", self.destination)?;
+
+        if let Some(transport) = self.transport {
+            write!(f, " 0x{}", transport)?;
+        }
+
+        write!(f, " 0x[{}]/", self.data.len())?;
+
+        Ok(())
+    }
+}

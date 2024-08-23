@@ -39,20 +39,22 @@ pub trait HashIdentity {
 
 #[derive(Copy, Clone)]
 pub struct Identity {
-    public_key: PublicKey,
-    verifying_key: VerifyingKey,
-    address_hash: AddressHash,
+    pub public_key: PublicKey,
+    pub verifying_key: VerifyingKey,
+    pub address_hash: AddressHash,
 }
 
 impl Identity {
     pub fn new(public_key: PublicKey, verifying_key: VerifyingKey) -> Self {
-        let address_hash = AddressHash::new_from_hash(&Hash::new(
+        let hash = Hash::new(
             Hash::generator()
-                .chain_update(public_key)
-                .chain_update(verifying_key)
+                .chain_update(public_key.as_bytes())
+                .chain_update(verifying_key.as_bytes())
                 .finalize()
                 .into(),
-        ));
+        );
+
+        let address_hash = AddressHash::new_from_hash(&hash);
 
         Self {
             public_key,
@@ -187,6 +189,10 @@ impl PrivateIdentity {
 
     pub fn as_identity(&self) -> &Identity {
         &self.identity
+    }
+
+    pub fn address_hash(&self) -> &AddressHash {
+        &self.identity.address_hash
     }
 
     pub fn verify(&self, data: &[u8], signature: &Signature) -> Result<(), RnsError> {

@@ -1,69 +1,97 @@
 use crate::{
+    buffer::OutputBuffer,
     error::RnsError,
     hash::AddressHash,
     packet::{Header, Packet, PacketContext},
 };
 
-trait Serialize {
-    fn serialize(&self, buf: &mut [u8]) -> Result<usize, RnsError>;
+pub trait Serialize {
+    fn serialize(&self, buffer: &mut OutputBuffer) -> Result<usize, RnsError>;
 }
 
-trait Deserialize {
-    fn deserialize(&self, buf: &[u8]) -> Result<(), RnsError>;
+pub trait Deserialize {
+    fn deserialize(&self, buf: &[u8]) -> Result<usize, RnsError>;
 }
 
 impl Serialize for AddressHash {
-    fn serialize(&self, buf: &mut [u8]) -> Result<usize, RnsError> {
-        if buf.len() >= self.len() {
-            buf[..self.len()].copy_from_slice(self.as_slice());
-            Ok(self.len())
-        } else {
-            Err(RnsError::InvalidArgument)
-        }
+    fn serialize(&self, buffer: &mut OutputBuffer) -> Result<usize, RnsError> {
+        buffer.write(self.as_slice())
     }
 }
 
 impl Serialize for Header {
-    fn serialize(&self, buf: &mut [u8]) -> Result<usize, RnsError> {
+    fn serialize(&self, buffer: &mut OutputBuffer) -> Result<usize, RnsError> {
         let meta = (self.ifac_flag as u8) << 7
             | (self.header_type as u8) << 6
             | (self.propagation_type as u8) << 4
             | (self.destination_type as u8) << 2
             | (self.packet_type as u8) << 0;
 
-        if buf.len() >= 2 {
-            buf[0] = meta;
-            buf[1] = self.hops;
-            Ok(2)
-        } else {
-            Err(RnsError::InvalidArgument)
-        }
+        buffer.write(&[meta, self.hops])
     }
 }
 impl Serialize for PacketContext {
-    fn serialize(&self, buf: &mut [u8]) -> Result<usize, RnsError> {
-        if buf.len() >= 1 {
-            buf[0] = *self as u8;
-            Ok(1)
-        } else {
-            Err(RnsError::InvalidArgument)
-        }
+    fn serialize(&self, buffer: &mut OutputBuffer) -> Result<usize, RnsError> {
+        buffer.write(&[*self as u8])
     }
 }
 
 impl<'a> Serialize for Packet<'a> {
-    fn serialize(&self, buf: &mut [u8]) -> Result<usize, RnsError> {
-        let mut buf_offset = 0;
+    fn serialize(&self, buffer: &mut OutputBuffer) -> Result<usize, RnsError> {
+        self.header.serialize(buffer)?;
 
-        buf_offset += self.header.serialize(&mut buf[buf_offset..])?;
-        buf_offset += self.destination.serialize(&mut buf[buf_offset..])?;
+        self.destination.serialize(buffer)?;
 
         if let Some(transport) = &self.transport {
-            buf_offset += transport.serialize(&mut buf[buf_offset..])?;
+            transport.serialize(buffer)?;
         }
 
-        buf_offset += self.context.serialize(&mut buf[buf_offset..])?;
+        self.context.serialize(buffer)?;
 
-        Ok(buf_offset)
+        buffer.write(self.data)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use core::str;
+    use rand_core::OsRng;
+
+    use crate::{
+        buffer::OutputBuffer,
+        hash::{AddressHash, Hash},
+        packet::{
+            DestinationType, Header, HeaderType, IfacFlag, Packet, PacketContext, PacketType,
+            PropagationType,
+        },
+    };
+
+    use super::Serialize;
+
+    #[test]
+    fn serialize_packet() {
+        let mut output_data = [0u8; 4096];
+
+        let mut buffer = OutputBuffer::new(&mut output_data);
+
+        let packet = Packet {
+            header: Header {
+                ifac_flag: IfacFlag::Open,
+                header_type: HeaderType::Type1,
+                propagation_type: PropagationType::Broadcast,
+                destination_type: DestinationType::Single,
+                packet_type: PacketType::Announce,
+                hops: 0,
+            },
+            ifac: &[],
+            destination: AddressHash::new_from_rand(OsRng),
+            transport: None,
+            context: PacketContext::None,
+            data: &[],
+        };
+
+        packet.serialize(&mut buffer).expect("serialized packet");
+
+        println!("{}", buffer);
     }
 }
