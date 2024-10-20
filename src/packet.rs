@@ -1,6 +1,12 @@
 use core::fmt;
 
+use sha2::Digest;
+
+use crate::buffer::StaticBuffer;
 use crate::hash::AddressHash;
+use crate::hash::Hash;
+
+pub const PACKET_MDU: usize = 512usize;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum IfacFlag {
@@ -73,6 +79,17 @@ pub struct Header {
     pub hops: u8,
 }
 
+impl Header {
+    pub fn to_meta(&self) -> u8 {
+        let meta = (self.ifac_flag as u8) << 7
+            | (self.header_type as u8) << 6
+            | (self.propagation_type as u8) << 4
+            | (self.destination_type as u8) << 2
+            | (self.packet_type as u8) << 0;
+        meta
+    }
+}
+
 impl fmt::Display for Header {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
@@ -88,16 +105,30 @@ impl fmt::Display for Header {
     }
 }
 
+pub type PacketDataBuffer = StaticBuffer<PACKET_MDU>;
+
 pub struct Packet<'a> {
     pub header: Header,
-    pub ifac: &'a [u8],
+    pub ifac: Option<&'a [u8]>,
     pub destination: AddressHash,
     pub transport: Option<AddressHash>,
     pub context: PacketContext,
-    pub data: &'a [u8],
+    pub data: PacketDataBuffer,
 }
 
-impl<'a> Packet<'a> {}
+impl<'a> Packet<'a> {
+    pub fn hash(&self) -> Hash {
+        Hash::new(
+            Hash::generator()
+                .chain_update(&[self.header.to_meta() & 0b00001111])
+                .chain_update(self.destination.as_slice())
+                .chain_update(&[self.context as u8])
+                .chain_update(self.data.as_slice())
+                .finalize()
+                .into(),
+        )
+    }
+}
 
 impl<'a> fmt::Display for Packet<'a> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

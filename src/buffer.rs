@@ -2,6 +2,55 @@ use core::fmt;
 
 use crate::error::RnsError;
 
+pub struct StaticBuffer<const N: usize> {
+    buffer: [u8; N],
+    len: usize,
+}
+
+impl<const N: usize> StaticBuffer<N> {
+    pub const fn new() -> Self {
+        Self {
+            buffer: [0u8; N],
+            len: 0,
+        }
+    }
+
+    pub fn reset(&mut self) {
+        self.len = 0;
+    }
+
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    pub fn chain_write(&mut self, data: &[u8]) -> Result<&mut Self, RnsError> {
+        self.write(data)?;
+        Ok(self)
+    }
+
+    pub fn write(&mut self, data: &[u8]) -> Result<usize, RnsError> {
+        let data_size = data.len();
+
+        // Nothing to write
+        if data_size == 0 {
+            return Ok(0);
+        }
+
+        if (self.len + data_size) > N {
+            return Err(RnsError::OutOfMemory);
+        }
+
+        self.buffer[self.len..(self.len + data_size)].copy_from_slice(data);
+        self.len += data_size;
+
+        Ok(data_size)
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        &self.buffer[..self.len]
+    }
+}
+
 pub struct OutputBuffer<'a> {
     buffer: &'a mut [u8],
     offset: usize,

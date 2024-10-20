@@ -8,12 +8,11 @@ use crate::{
         DecryptIdentity, EmptyIdentity, EncryptIdentity, HashIdentity, Identity, PrivateIdentity,
     },
     packet::{
-        DestinationType, Header, HeaderType, IfacFlag, Packet, PacketContext, PacketType,
-        PropagationType,
+        self, DestinationType, Header, HeaderType, IfacFlag, Packet, PacketContext, PacketType, PropagationType
     },
 };
 
-use sha2::{digest::Update, Digest, Sha256};
+use sha2::Digest;
 
 use core::marker::PhantomData;
 
@@ -30,7 +29,7 @@ impl Direction for Output {}
 //***************************************************************************//
 
 pub trait Type {
-    fn destination_type(&self) -> DestinationType;
+    fn destination_type() -> DestinationType;
 }
 
 pub struct Single;
@@ -39,25 +38,25 @@ pub struct Group;
 pub struct Link;
 
 impl Type for Single {
-    fn destination_type(&self) -> DestinationType {
+    fn destination_type() -> DestinationType {
         DestinationType::Single
     }
 }
 
 impl Type for Plain {
-    fn destination_type(&self) -> DestinationType {
+    fn destination_type() -> DestinationType {
         DestinationType::Plain
     }
 }
 
 impl Type for Group {
-    fn destination_type(&self) -> DestinationType {
+    fn destination_type() -> DestinationType {
         DestinationType::Group
     }
 }
 
 impl Type for Link {
-    fn destination_type(&self) -> DestinationType {
+    fn destination_type() -> DestinationType {
         DestinationType::Link
     }
 }
@@ -67,7 +66,7 @@ pub const NAME_HASH_LENGTH: usize = 10;
 pub struct DestinationName<'a> {
     pub app_name: &'a str,
     pub aspects: &'a str,
-    hash: Hash,
+    pub hash: Hash,
 }
 
 impl<'a> DestinationName<'a> {
@@ -94,11 +93,17 @@ impl<'a> DestinationName<'a> {
 }
 
 pub struct Destination<'a, I: HashIdentity, D: Direction, T: Type> {
-    direction: PhantomData<D>,
-    r#type: PhantomData<T>,
-    identity: &'a I,
+    pub direction: PhantomData<D>,
+    pub r#type: PhantomData<T>,
+    pub identity: &'a I,
     pub name: DestinationName<'a>,
     pub address_hash: AddressHash,
+}
+
+impl<'a, I: HashIdentity, D: Direction, T: Type> Destination<'a, I, D, T> {
+    pub fn destination_type(&self) -> packet::DestinationType {
+        <T as Type>::destination_type()
+    }
 }
 
 impl<'a, I: DecryptIdentity + HashIdentity, T: Type> Destination<'a, I, Input, T> {
@@ -226,6 +231,7 @@ mod tests {
     use rand_core::OsRng;
 
     use crate::buffer::OutputBuffer;
+    use crate::hash::Hash;
     use crate::identity::PrivateIdentity;
     use crate::serde::Serialize;
 
@@ -247,6 +253,17 @@ mod tests {
             .expect("valid announce packet");
 
         println!("Announce packet {}", announce_packet);
+    }
+
+    #[test]
+    fn create_path_request_hash() {
+        let name = DestinationName::new("rnstransport", "path.request");
+
+        println!("PathRequest Name Hash {}", name.hash);
+        println!(
+            "PathRequest Destination Hash {}",
+            Hash::new_from_slice(name.as_name_hash_slice())
+        );
     }
 
     #[test]

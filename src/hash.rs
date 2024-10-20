@@ -26,11 +26,11 @@ impl Hash {
         Sha256::new()
     }
 
-    pub fn new(hash: [u8; HASH_SIZE]) -> Self {
+    pub const fn new(hash: [u8; HASH_SIZE]) -> Self {
         Self { 0: hash }
     }
 
-    pub fn new_empty() -> Self {
+    pub const fn new_empty() -> Self {
         Self {
             0: [0u8; HASH_SIZE],
         }
@@ -66,7 +66,7 @@ impl Hash {
 }
 
 impl AddressHash {
-    pub fn new(hash: [u8; ADDRESS_HASH_SIZE]) -> Self {
+    pub const fn new(hash: [u8; ADDRESS_HASH_SIZE]) -> Self {
         Self { 0: hash }
     }
 
@@ -96,6 +96,12 @@ impl AddressHash {
 
     pub const fn len(&self) -> usize {
         self.0.len()
+    }
+}
+
+impl From<Hash> for AddressHash {
+    fn from(hash: Hash) -> Self {
+        Self::new_from_hash(&hash)
     }
 }
 

@@ -21,13 +21,7 @@ impl Serialize for AddressHash {
 
 impl Serialize for Header {
     fn serialize(&self, buffer: &mut OutputBuffer) -> Result<usize, RnsError> {
-        let meta = (self.ifac_flag as u8) << 7
-            | (self.header_type as u8) << 6
-            | (self.propagation_type as u8) << 4
-            | (self.destination_type as u8) << 2
-            | (self.packet_type as u8) << 0;
-
-        buffer.write(&[meta, self.hops])
+        buffer.write(&[self.to_meta(), self.hops])
     }
 }
 impl Serialize for PacketContext {
@@ -58,7 +52,7 @@ mod tests {
     use rand_core::OsRng;
 
     use crate::{
-        buffer::OutputBuffer,
+        buffer::{OutputBuffer, StaticBuffer},
         hash::{AddressHash, Hash},
         packet::{
             DestinationType, Header, HeaderType, IfacFlag, Packet, PacketContext, PacketType,
@@ -83,11 +77,11 @@ mod tests {
                 packet_type: PacketType::Announce,
                 hops: 0,
             },
-            ifac: &[],
+            ifac: None,
             destination: AddressHash::new_from_rand(OsRng),
             transport: None,
             context: PacketContext::None,
-            data: &[],
+            data: StaticBuffer::new(),
         };
 
         packet.serialize(&mut buffer).expect("serialized packet");
