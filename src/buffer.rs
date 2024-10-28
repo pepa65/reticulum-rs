@@ -15,6 +15,14 @@ impl<const N: usize> StaticBuffer<N> {
         }
     }
 
+    pub fn new_from_slice(data: &[u8]) -> Self {
+        let mut buffer = Self::new();
+
+        buffer.safe_write(data);
+
+        buffer
+    }
+
     pub fn reset(&mut self) {
         self.len = 0;
     }
@@ -26,6 +34,14 @@ impl<const N: usize> StaticBuffer<N> {
     pub fn chain_write(&mut self, data: &[u8]) -> Result<&mut Self, RnsError> {
         self.write(data)?;
         Ok(self)
+    }
+
+    pub fn safe_write(&mut self, data: &[u8]) -> usize {
+        let data_size = data.len();
+
+        let max_size = core::cmp::min(data_size, N - self.len);
+
+        self.write(&data[..max_size]).unwrap_or(0)
     }
 
     pub fn write(&mut self, data: &[u8]) -> Result<usize, RnsError> {

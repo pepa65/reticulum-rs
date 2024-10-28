@@ -8,7 +8,8 @@ use crate::{
         DecryptIdentity, EmptyIdentity, EncryptIdentity, HashIdentity, Identity, PrivateIdentity,
     },
     packet::{
-        self, DestinationType, Header, HeaderType, IfacFlag, Packet, PacketContext, PacketType, PropagationType
+        self, DestinationType, Header, HeaderType, IfacFlag, Packet, PacketContext,
+        PacketDataBuffer, PacketType, PropagationType,
     },
 };
 
@@ -173,11 +174,11 @@ impl<'a> Destination<'a, PrivateIdentity, Input, Single> {
                 packet_type: PacketType::Announce,
                 hops: 0,
             },
-            ifac: &[],
+            ifac: None,
             destination: self.address_hash,
             transport: None,
             context: PacketContext::None,
-            data: announce_data,
+            data: PacketDataBuffer::new_from_slice(announce_data),
         })
     }
 }

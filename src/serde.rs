@@ -42,18 +42,17 @@ impl<'a> Serialize for Packet<'a> {
 
         self.context.serialize(buffer)?;
 
-        buffer.write(self.data)
+        buffer.write(self.data.as_slice())
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use core::str;
     use rand_core::OsRng;
 
     use crate::{
         buffer::{OutputBuffer, StaticBuffer},
-        hash::{AddressHash, Hash},
+        hash::AddressHash,
         packet::{
             DestinationType, Header, HeaderType, IfacFlag, Packet, PacketContext, PacketType,
             PropagationType,
