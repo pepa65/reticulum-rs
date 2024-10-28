@@ -1,11 +1,14 @@
+use alloc::sync::Arc;
 use core::marker::PhantomData;
+use rand_core::CryptoRngCore;
 
 use crate::{
-    buffer::OutputBuffer,
+    async_io::{self, AsyncMytex},
     destination::{DestinationName, PlainOutputDesination},
     error::RnsError,
     hash::{AddressHash, Hash},
     identity::EmptyIdentity,
+    link::{Link, LinkStatus},
     packet::{self, Header, Packet, PacketContext, PacketDataBuffer},
 };
 
@@ -32,15 +35,21 @@ pub const PATH_REQUEST_DESTINATION: PlainOutputDesination = PlainOutputDesinatio
     ]),
 };
 
-pub struct Transport {}
+pub struct Transport<R: CryptoRngCore> {
+    pending_links: AsyncMytex<Vec<Arc<Link<R>>>>,
+}
 
-impl Transport {
+impl<R: CryptoRngCore> Transport<R> {
+    pub fn new() -> Self {
+        Self {
+            pending_links: AsyncMytex::new(Vec::new()),
+        }
+    }
 
     pub fn create_path_request<'a>(
         destination_hash: &AddressHash,
         tag: Option<&[u8]>,
     ) -> Result<Packet<'a>, RnsError> {
-
         let mut data = PacketDataBuffer::new();
 
         data.chain_write(destination_hash.as_slice())?
@@ -61,5 +70,16 @@ impl Transport {
             context: PacketContext::None,
             data,
         })
+    }
+}
+
+async fn update_pending_links<R: CryptoRngCore>(transport: Arc<Transport<R>>) {
+    loop {
+        {
+            let mut pending_links = transport.pending_links.lock().await;
+            pending_links.retain(|link| link.status() != LinkStatus::Closed);
+        }
+
+        async_io::async_sleep(core::time::Duration::from_secs(5)).await;
     }
 }
