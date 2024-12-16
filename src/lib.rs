@@ -8,9 +8,9 @@ pub mod destination;
 pub mod error;
 pub mod hash;
 pub mod identity;
+pub mod interface;
 pub mod link;
 pub mod packet;
-pub mod time;
 pub mod transport;
 
 mod serde;

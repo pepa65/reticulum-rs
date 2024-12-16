@@ -1,7 +1,5 @@
-use core::fmt::Debug;
-
 use hkdf::Hkdf;
-use rand_core::{CryptoRngCore, OsRng};
+use rand_core::CryptoRngCore;
 
 use ed25519_dalek::{
     ed25519::signature::Signer, Signature, SigningKey, VerifyingKey, PUBLIC_KEY_LENGTH,

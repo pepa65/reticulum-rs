@@ -95,6 +95,10 @@ impl<'a> OutputBuffer<'a> {
         Ok(data_size)
     }
 
+    pub fn write_byte(&mut self, byte: u8) -> Result<usize, RnsError> {
+        self.write(&[byte])
+    }
+
     pub fn reset(&mut self) {
         self.offset = 0;
     }

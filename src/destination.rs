@@ -1,4 +1,4 @@
-use rand_core::{CryptoRngCore, OsRng};
+use rand_core::CryptoRngCore;
 
 use crate::{
     buffer::OutputBuffer,
@@ -241,9 +241,9 @@ mod tests {
 
     #[test]
     fn create_announce() {
-        let mut identity = PrivateIdentity::new_from_rand(OsRng);
+        let identity = PrivateIdentity::new_from_rand(OsRng);
 
-        let mut single_in_destination =
+        let single_in_destination =
             SingleInputDesination::new(&identity, DestinationName::new("test", "in"));
 
         let mut announce_packet_data = [0u8; 1024];
