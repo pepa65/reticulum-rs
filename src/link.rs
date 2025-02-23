@@ -15,7 +15,7 @@ pub enum LinkStatus {
 
 pub type LinkId = AddressHash;
 
-impl From<Packet<'_>> for LinkId {
+impl From<Packet> for LinkId {
     fn from(packet: Packet) -> Self {
         packet.hash().into()
     }

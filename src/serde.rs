@@ -26,7 +26,7 @@ impl Serialize for PacketContext {
     }
 }
 
-impl<'a> Serialize for Packet<'a> {
+impl Serialize for Packet {
     fn serialize(&self, buffer: &mut OutputBuffer) -> Result<usize, RnsError> {
         self.header.serialize(buffer)?;
 
@@ -66,8 +66,8 @@ impl PacketContext {
         Ok(PacketContext::from(buffer.read_byte()?))
     }
 }
-impl<'a> Packet<'a> {
-    pub fn deserialize(buffer: &mut InputBuffer) -> Result<Packet<'a>, RnsError> {
+impl Packet {
+    pub fn deserialize(buffer: &mut InputBuffer) -> Result<Packet, RnsError> {
         let header = Header::deserialize(buffer)?;
 
         let destination = AddressHash::deserialize(buffer)?;

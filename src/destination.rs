@@ -141,12 +141,12 @@ impl<'a> Destination<'a, PrivateIdentity, Input, Single> {
         }
     }
 
-    pub fn announce<'b, R: CryptoRngCore + Copy>(
+    pub fn announce<R: CryptoRngCore + Copy>(
         &self,
         rng: R,
         app_data: Option<&[u8]>,
-        buffer: &'b mut OutputBuffer<'b>,
-    ) -> Result<Packet<'b>, RnsError> {
+        buffer: &mut OutputBuffer,
+    ) -> Result<Packet, RnsError> {
         let rand_hash = AddressHash::new_from_hash(&Hash::new_from_rand(rng));
 
         let address_hash_slice = self.address_hash.as_slice();

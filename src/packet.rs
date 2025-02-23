@@ -7,6 +7,7 @@ use crate::hash::AddressHash;
 use crate::hash::Hash;
 
 pub const PACKET_MDU: usize = 512usize;
+pub const PACKET_IFAC_MAX_LENGTH: usize = 64usize;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum IfacFlag {
@@ -202,16 +203,35 @@ impl fmt::Display for Header {
 
 pub type PacketDataBuffer = StaticBuffer<PACKET_MDU>;
 
-pub struct Packet<'a> {
+pub struct PacketIfac {
+    pub access_code: [u8; PACKET_IFAC_MAX_LENGTH],
+    pub length: usize,
+}
+
+impl PacketIfac {
+    pub fn new_from_slice(slice: &[u8]) -> Self {
+        let mut access_code = [0u8; PACKET_IFAC_MAX_LENGTH];
+        access_code[..slice.len()].copy_from_slice(slice);
+        Self {
+            access_code,
+            length: slice.len(),
+        }
+    }
+    pub fn as_slice(&self) -> &[u8] {
+        &self.access_code[..self.length]
+    }
+}
+
+pub struct Packet {
     pub header: Header,
-    pub ifac: Option<&'a [u8]>,
+    pub ifac: Option<PacketIfac>,
     pub destination: AddressHash,
     pub transport: Option<AddressHash>,
     pub context: PacketContext,
     pub data: PacketDataBuffer,
 }
 
-impl<'a> Packet<'a> {
+impl Packet {
     pub fn hash(&self) -> Hash {
         Hash::new(
             Hash::generator()
@@ -225,7 +245,7 @@ impl<'a> Packet<'a> {
     }
 }
 
-impl<'a> fmt::Display for Packet<'a> {
+impl fmt::Display for Packet {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "/{}", self.header)?;
 

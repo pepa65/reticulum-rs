@@ -46,10 +46,10 @@ impl<R: CryptoRngCore> Transport<R> {
         }
     }
 
-    pub fn create_path_request<'a>(
+    pub fn create_path_request(
         destination_hash: &AddressHash,
         tag: Option<&[u8]>,
-    ) -> Result<Packet<'a>, RnsError> {
+    ) -> Result<Packet, RnsError> {
         let mut data = PacketDataBuffer::new();
 
         data.chain_write(destination_hash.as_slice())?
