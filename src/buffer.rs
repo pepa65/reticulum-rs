@@ -65,6 +65,15 @@ impl<const N: usize> StaticBuffer<N> {
     pub fn as_slice(&self) -> &[u8] {
         &self.buffer[..self.len]
     }
+
+    pub fn as_mut_slice(&mut self) -> &mut [u8] {
+        &mut self.buffer[..self.len]
+    }
+
+    pub fn accuire_buf(&mut self, len: usize) -> &mut [u8] {
+        self.len = len;
+        &mut self.buffer[..self.len]
+    }
 }
 
 pub struct OutputBuffer<'a> {
@@ -133,5 +142,55 @@ impl<'a> fmt::Display for OutputBuffer<'a> {
         }
 
         write!(f, " ]",)
+    }
+}
+
+pub struct InputBuffer<'a> {
+    buffer: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> InputBuffer<'a> {
+    pub fn new(buffer: &'a [u8]) -> Self {
+        Self { offset: 0, buffer }
+    }
+
+    pub fn read(&mut self, buf: &mut [u8]) -> Result<usize, RnsError> {
+        let size = buf.len();
+        if (self.offset + size) > self.buffer.len() {
+            return Err(RnsError::OutOfMemory);
+        }
+
+        buf.copy_from_slice(&self.buffer[self.offset..(self.offset + size)]);
+        self.offset += size;
+
+        Ok(size)
+    }
+
+    pub fn read_size(&mut self, buf: &mut [u8], size: usize) -> Result<usize, RnsError> {
+       
+        if (self.offset + size) > self.buffer.len() {
+            return Err(RnsError::OutOfMemory);
+        }
+
+        if buf.len() < size {
+            return Err(RnsError::OutOfMemory);
+        }
+
+        buf[..size].copy_from_slice(&self.buffer[self.offset..(self.offset + size)]);
+        self.offset += size;
+
+        Ok(size)
+    }
+
+    pub fn read_byte(&mut self) -> Result<u8, RnsError> {
+        let mut buf = [0u8; 1];
+        self.read(&mut buf)?;
+
+        Ok(buf[0])
+    }
+
+    pub fn bytes_left(&self) -> usize {
+        self.buffer.len() - self.offset
     }
 }
