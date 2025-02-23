@@ -8,7 +8,7 @@ pub mod destination;
 pub mod error;
 pub mod hash;
 pub mod identity;
-pub mod interface;
+pub mod iface;
 pub mod link;
 pub mod packet;
 pub mod transport;

@@ -86,6 +86,10 @@ impl AddressHash {
         Self::new_from_hash(&Hash::new_from_rand(rng))
     }
 
+    pub const fn new_empty() -> Self {
+        Self { 0: [0u8; ADDRESS_HASH_SIZE] }
+    }
+
     pub fn as_slice(&self) -> &[u8] {
         &self.0[..]
     }

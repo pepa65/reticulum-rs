@@ -116,7 +116,7 @@ impl<I: Read, const N: usize> Read for Hdlc<I, N> {
 mod tests {
     use std::io::{Cursor, Read, Write};
 
-    use crate::interface::hdlc::Hdlc;
+    use crate::iface::hdlc::Hdlc;
 
     #[test]
     fn encode_decode_data() {
