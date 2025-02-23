@@ -1,0 +1,14 @@
+syntax = "proto3";
+
+import "empty.proto";
+
+package kaonic;
+
+service Device {
+    rpc GetInfo(kaonic.Empty) returns (InfoResponse) {}
+    rpc GetStatistics(kaonic.Empty) returns (StatisticsResponse) {}
+}
+
+message InfoResponse {}
+
+message StatisticsResponse {}

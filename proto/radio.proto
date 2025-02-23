@@ -1,0 +1,43 @@
+syntax = "proto3";
+
+import "empty.proto";
+
+package kaonic;
+
+service Radio {
+    rpc Configure(ConfigurationRequest) returns (kaonic.Empty) {}
+    rpc Transmit(TransmitRequest) returns (TransmitResponse) {}
+    rpc ReceiveStream(ReceiveRequest) returns (stream ReceiveResponse) {}
+}
+
+message RadioFrame {
+    repeated uint32 data = 1;
+    uint32 length = 2;
+}
+
+message ConfigurationRequest {
+    uint32 module = 1;
+    uint32 freq = 2;
+    uint32 channel = 3;
+    uint32 channel_spacing = 4;
+}
+
+message TransmitRequest {
+    uint32 module = 1;
+    RadioFrame frame = 2;
+}
+
+message TransmitResponse {
+    uint32 latency = 1;
+}
+
+message ReceiveRequest {
+    uint32 module = 1;
+    uint32 timeout = 2;
+}
+
+message ReceiveResponse {
+    RadioFrame frame = 1;
+    int32 rssi = 2;
+    uint32 latency = 3;
+}
