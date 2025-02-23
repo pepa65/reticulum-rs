@@ -14,10 +14,30 @@ pub enum IfacFlag {
     Authenticated = 0b1,
 }
 
+impl From<u8> for IfacFlag {
+    fn from(value: u8) -> Self {
+        match value {
+            0 => IfacFlag::Open,
+            1 => IfacFlag::Authenticated,
+            _ => IfacFlag::Open,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum HeaderType {
     Type1 = 0b0,
     Type2 = 0b1,
+}
+
+impl From<u8> for HeaderType {
+    fn from(value: u8) -> Self {
+        match value & 0b1 {
+            0 => HeaderType::Type1,
+            1 => HeaderType::Type2,
+            _ => HeaderType::Type1,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -28,6 +48,18 @@ pub enum PropagationType {
     Reserved2 = 0b11,
 }
 
+impl From<u8> for PropagationType {
+    fn from(value: u8) -> Self {
+        match value & 0b11 {
+            0b00 => PropagationType::Broadcast,
+            0b01 => PropagationType::Transport,
+            0b10 => PropagationType::Reserved1,
+            0b11 => PropagationType::Reserved2,
+            _ => PropagationType::Broadcast,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum DestinationType {
     Single = 0b00,
@@ -36,12 +68,36 @@ pub enum DestinationType {
     Link = 0b11,
 }
 
+impl From<u8> for DestinationType {
+    fn from(value: u8) -> Self {
+        match value & 0b11 {
+            0b00 => DestinationType::Single,
+            0b01 => DestinationType::Group,
+            0b10 => DestinationType::Plain,
+            0b11 => DestinationType::Link,
+            _ => DestinationType::Single,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum PacketType {
     Data = 0b00,
     Announce = 0b01,
     LinkRequest = 0b10,
     Proof = 0b11,
+}
+
+impl From<u8> for PacketType {
+    fn from(value: u8) -> Self {
+        match value & 0b11 {
+            0b00 => PacketType::Data,
+            0b01 => PacketType::Announce,
+            0b10 => PacketType::LinkRequest,
+            0b11 => PacketType::Proof,
+            _ => PacketType::Data,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
@@ -69,6 +125,34 @@ pub enum PacketContext {
     LinkRequestProof = 0xFF,        // Packet is a link request proof
 }
 
+impl From<u8> for PacketContext {
+    fn from(value: u8) -> Self {
+        match value {
+            0x01 => PacketContext::Resource,
+            0x02 => PacketContext::ResourceAdvrtisement,
+            0x03 => PacketContext::ResourceRequest,
+            0x04 => PacketContext::ResourceHashUpdate,
+            0x05 => PacketContext::ResourceProof,
+            0x06 => PacketContext::ResourceInitiatorCancel,
+            0x07 => PacketContext::ResourceReceiverCancel,
+            0x08 => PacketContext::CacheRequest,
+            0x09 => PacketContext::Request,
+            0x0A => PacketContext::Response,
+            0x0B => PacketContext::PathResponse,
+            0x0C => PacketContext::Command,
+            0x0D => PacketContext::CommandStatus,
+            0x0E => PacketContext::Channel,
+            0xFA => PacketContext::KeepAlive,
+            0xFB => PacketContext::LinkIdentify,
+            0xFC => PacketContext::LinkClose,
+            0xFD => PacketContext::LinkProof,
+            0xFE => PacketContext::LinkRTT,
+            0xFF => PacketContext::LinkRequestProof,
+            _ => PacketContext::None,
+        }
+    }
+}
+
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub struct Header {
     pub ifac_flag: IfacFlag,
@@ -87,6 +171,17 @@ impl Header {
             | (self.destination_type as u8) << 2
             | (self.packet_type as u8) << 0;
         meta
+    }
+
+    pub fn from_meta(meta: u8) -> Self {
+        Self {
+            ifac_flag: IfacFlag::from(meta >> 7),
+            header_type: HeaderType::from(meta >> 6),
+            propagation_type: PropagationType::from(meta >> 4),
+            destination_type: DestinationType::from(meta >> 2),
+            packet_type: PacketType::from(meta >> 0),
+            hops: 0,
+        }
     }
 }
 
