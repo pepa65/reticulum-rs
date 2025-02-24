@@ -2,6 +2,8 @@ use alloc::sync::Arc;
 use core::marker::PhantomData;
 use rand_core::CryptoRngCore;
 
+use crate::iface::Interface;
+
 use crate::{
     async_io::{self, AsyncMytex},
     destination::{DestinationName, PlainOutputDesination},
@@ -37,12 +39,14 @@ pub const PATH_REQUEST_DESTINATION: PlainOutputDesination = PlainOutputDesinatio
 
 pub struct Transport<R: CryptoRngCore> {
     pending_links: AsyncMytex<Vec<Arc<Link<R>>>>,
+    iface_list: Vec<Arc<dyn Interface>>,
 }
 
 impl<R: CryptoRngCore> Transport<R> {
-    pub fn new() -> Self {
+    pub fn new(iface_list: Vec<Arc<dyn Interface>>) -> Self {
         Self {
             pending_links: AsyncMytex::new(Vec::new()),
+            iface_list,
         }
     }
 
