@@ -2,6 +2,7 @@ use core::fmt;
 
 use crate::error::RnsError;
 
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub struct StaticBuffer<const N: usize> {
     buffer: [u8; N],
     len: usize,
@@ -36,6 +37,10 @@ impl<const N: usize> StaticBuffer<N> {
         Ok(self)
     }
 
+    pub fn finalize(self) -> Self {
+        self
+    }
+
     pub fn safe_write(&mut self, data: &[u8]) -> usize {
         let data_size = data.len();
 
@@ -60,6 +65,18 @@ impl<const N: usize> StaticBuffer<N> {
         self.len += data_size;
 
         Ok(data_size)
+    }
+
+    pub fn rotate_left(&mut self, mid: usize) -> Result<usize, RnsError> {
+        if mid > self.len {
+            return Err(RnsError::InvalidArgument);
+        }
+
+        self.len = self.len - mid;
+
+        self.buffer.rotate_left(mid);
+
+        Ok(self.len)
     }
 
     pub fn as_slice(&self) -> &[u8] {
@@ -145,6 +162,18 @@ impl<'a> fmt::Display for OutputBuffer<'a> {
     }
 }
 
+impl<const N: usize> fmt::Display for StaticBuffer<N> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "[ 0x")?;
+
+        for i in 0..self.len {
+            write!(f, "{:0>2x}", self.buffer[i])?;
+        }
+
+        write!(f, " ]",)
+    }
+}
+
 pub struct InputBuffer<'a> {
     buffer: &'a [u8],
     offset: usize,
@@ -168,7 +197,6 @@ impl<'a> InputBuffer<'a> {
     }
 
     pub fn read_size(&mut self, buf: &mut [u8], size: usize) -> Result<usize, RnsError> {
-       
         if (self.offset + size) > self.buffer.len() {
             return Err(RnsError::OutOfMemory);
         }
@@ -188,6 +216,18 @@ impl<'a> InputBuffer<'a> {
         self.read(&mut buf)?;
 
         Ok(buf[0])
+    }
+
+    pub fn read_slice(&mut self, size: usize) -> Result<&[u8], RnsError> {
+        if (self.offset + size) > self.buffer.len() {
+            return Err(RnsError::OutOfMemory);
+        }
+
+        let slice = &self.buffer[self.offset..self.offset + size];
+
+        self.offset += size;
+
+        Ok(slice)
     }
 
     pub fn bytes_left(&self) -> usize {

@@ -5,5 +5,6 @@ pub enum RnsError {
     IncorrectSignature,
     IncorrectHash,
     CryptoError,
+    PacketError,
     ConnectionError,
 }

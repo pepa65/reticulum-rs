@@ -1,5 +1,5 @@
 [package]
-name = "reticulum-rs"
+name = "reticulum"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
@@ -28,6 +28,11 @@ rand_core = { version = "0.6.4", features = ["getrandom"] }
 # Async IO
 tokio = { version = "1", features = ["full"] }
 tokio-stream = "0.1.14"
+tokio-util = "0.7.13"
+
+# Logging
+log = "0.4.26"
+env_logger = "0.10"
 
 [features]
 default = ["alloc"]
@@ -37,5 +42,5 @@ alloc = []
 tonic-build = "0.12.3"
 
 [[example]]
-name = "kaonic_grpc_app"
-path = "examples/kaonic_grpc_app.rs"
+name = "tcp_app"
+path = "examples/tcp_app.rs"

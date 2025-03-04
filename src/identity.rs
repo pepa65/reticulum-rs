@@ -1,10 +1,8 @@
 use hkdf::Hkdf;
 use rand_core::CryptoRngCore;
 
-use ed25519_dalek::{
-    ed25519::signature::Signer, Signature, SigningKey, VerifyingKey, PUBLIC_KEY_LENGTH,
-};
-use sha2::{Digest, Sha256};
+use ed25519_dalek::{ed25519::signature::Signer, Signature, SigningKey, VerifyingKey};
+use sha2::{Digest, Sha256, Sha512};
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
 
 use crate::{
@@ -12,6 +10,8 @@ use crate::{
     error::RnsError,
     hash::{AddressHash, Hash},
 };
+
+pub const PUBLIC_KEY_LENGTH: usize = ed25519_dalek::PUBLIC_KEY_LENGTH;
 
 pub trait EncryptIdentity {
     fn encrypt<'a, R: CryptoRngCore + Copy>(
@@ -63,6 +63,10 @@ impl Identity {
 
     pub fn public_key_bytes(&self) -> &[u8; PUBLIC_KEY_LENGTH] {
         self.public_key.as_bytes()
+    }
+
+    pub fn verifying_key_bytes(&self) -> &[u8; PUBLIC_KEY_LENGTH] {
+        self.verifying_key.as_bytes()
     }
 
     pub fn verify(&self, data: &[u8], signature: &Signature) -> Result<(), RnsError> {

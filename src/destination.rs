@@ -1,11 +1,14 @@
+use ed25519_dalek::{Signature, VerifyingKey, SIGNATURE_LENGTH};
 use rand_core::CryptoRngCore;
+use x25519_dalek::PublicKey;
 
 use crate::{
-    buffer::OutputBuffer,
+    buffer::{InputBuffer, OutputBuffer},
     error::RnsError,
     hash::{AddressHash, Hash},
     identity::{
         DecryptIdentity, EmptyIdentity, EncryptIdentity, HashIdentity, Identity, PrivateIdentity,
+        PUBLIC_KEY_LENGTH,
     },
     packet::{
         self, DestinationType, Header, HeaderType, IfacFlag, Packet, PacketContext,
@@ -13,7 +16,7 @@ use crate::{
     },
 };
 
-use sha2::Digest;
+use sha2::{Digest, Sha512};
 
 use core::marker::PhantomData;
 
@@ -63,6 +66,9 @@ impl Type for Link {
 }
 
 pub const NAME_HASH_LENGTH: usize = 10;
+pub const RAND_HASH_LENGTH: usize = 10;
+pub const MIN_ANNOUNCE_DATA_LENGTH: usize =
+    PUBLIC_KEY_LENGTH * 2 + NAME_HASH_LENGTH + RAND_HASH_LENGTH + SIGNATURE_LENGTH;
 
 pub struct DestinationName<'a> {
     pub app_name: &'a str,
@@ -88,15 +94,91 @@ impl<'a> DestinationName<'a> {
         }
     }
 
+    pub fn new_from_hash_slice(hash_slice: &[u8]) -> Self {
+        let mut hash = [0u8; 32];
+        hash[..hash_slice.len()].copy_from_slice(hash_slice);
+
+        Self {
+            app_name: "",
+            aspects: "",
+            hash: Hash::new(hash),
+        }
+    }
+
     pub fn as_name_hash_slice(&self) -> &[u8] {
         &self.hash.as_slice()[..NAME_HASH_LENGTH]
+    }
+}
+
+pub type DestinationAnnounce = Packet;
+
+impl DestinationAnnounce {
+    pub fn validate(packet: &Packet) -> Result<SingleOutputDesination, RnsError> {
+        if packet.header.packet_type != PacketType::Announce {
+            return Err(RnsError::PacketError);
+        }
+
+        let announce_data = packet.data.as_slice();
+
+        if announce_data.len() < MIN_ANNOUNCE_DATA_LENGTH {
+            return Err(RnsError::OutOfMemory);
+        }
+
+        let mut offset = 0usize;
+
+        let public_key = {
+            let mut key_data = [0u8; PUBLIC_KEY_LENGTH];
+            key_data.copy_from_slice(&announce_data[offset..(offset + PUBLIC_KEY_LENGTH)]);
+            offset += PUBLIC_KEY_LENGTH;
+            PublicKey::from(key_data)
+        };
+
+        let verifying_key = {
+            let mut key_data = [0u8; PUBLIC_KEY_LENGTH];
+            key_data.copy_from_slice(&announce_data[offset..(offset + PUBLIC_KEY_LENGTH)]);
+            offset += PUBLIC_KEY_LENGTH;
+
+            VerifyingKey::from_bytes(&key_data).map_err(|_| RnsError::CryptoError)?
+        };
+
+        let identity = Identity::new(public_key, verifying_key);
+
+        let name_hash = &announce_data[offset..(offset + NAME_HASH_LENGTH)];
+        offset += NAME_HASH_LENGTH;
+        let rand_hash = &announce_data[offset..(offset + RAND_HASH_LENGTH)];
+        offset += RAND_HASH_LENGTH;
+        let signature = &announce_data[offset..(offset + SIGNATURE_LENGTH)];
+        offset += SIGNATURE_LENGTH;
+        let app_data = &announce_data[offset..];
+
+        let destination = &packet.destination;
+
+        // Keeping signed data on stack is only option for now.
+        // Verification function doesn't support prehashed message.
+        let signed_data = PacketDataBuffer::new()
+            .chain_write(destination.as_slice())?
+            .chain_write(public_key.as_bytes())?
+            .chain_write(verifying_key.as_bytes())?
+            .chain_write(name_hash)?
+            .chain_write(rand_hash)?
+            .chain_write(app_data)?
+            .finalize();
+
+        let signature = Signature::from_slice(signature).map_err(|_| RnsError::CryptoError)?;
+
+        identity.verify(signed_data.as_slice(), &signature)?;
+
+        Ok(SingleOutputDesination::new(
+            identity,
+            DestinationName::new_from_hash_slice(name_hash),
+        ))
     }
 }
 
 pub struct Destination<'a, I: HashIdentity, D: Direction, T: Type> {
     pub direction: PhantomData<D>,
     pub r#type: PhantomData<T>,
-    pub identity: &'a I,
+    pub identity: I,
     pub name: DestinationName<'a>,
     pub address_hash: AddressHash,
 }
@@ -130,8 +212,8 @@ impl<'a, I: EncryptIdentity + HashIdentity, D: Direction, T: Type> Destination<'
 }
 
 impl<'a> Destination<'a, PrivateIdentity, Input, Single> {
-    pub fn new(identity: &'a PrivateIdentity, name: DestinationName<'a>) -> Self {
-        let address_hash = create_address_hash(identity, &name);
+    pub fn new(identity: PrivateIdentity, name: DestinationName<'a>) -> Self {
+        let address_hash = create_address_hash(&identity, &name);
         Self {
             direction: PhantomData,
             r#type: PhantomData,
@@ -145,25 +227,40 @@ impl<'a> Destination<'a, PrivateIdentity, Input, Single> {
         &self,
         rng: R,
         app_data: Option<&[u8]>,
-        buffer: &mut OutputBuffer,
     ) -> Result<Packet, RnsError> {
-        let rand_hash = AddressHash::new_from_hash(&Hash::new_from_rand(rng));
+        let mut packet_data = PacketDataBuffer::new();
 
-        let address_hash_slice = self.address_hash.as_slice();
-        buffer.write(address_hash_slice)?;
-        buffer.write(self.identity.as_identity().public_key_bytes())?;
-        buffer.write(self.name.as_name_hash_slice())?;
-        buffer.write(rand_hash.as_slice())?;
+        let rand_hash = Hash::new_from_rand(rng);
+        let rand_hash = &rand_hash.as_slice()[..10];
+
+        let pub_key = self.identity.as_identity().public_key_bytes();
+        let verifying_key = self.identity.as_identity().verifying_key_bytes();
+
+        packet_data
+            .chain_write(self.address_hash.as_slice())?
+            .chain_write(pub_key)?
+            .chain_write(verifying_key)?
+            .chain_write(self.name.as_name_hash_slice())?
+            .chain_write(rand_hash)?;
 
         if let Some(data) = app_data {
-            buffer.write(data)?;
+            packet_data.write(data)?;
         }
 
-        let signature = self.identity.sign(buffer.as_slice())?;
+        let signature = self.identity.sign(packet_data.as_slice())?;
 
-        buffer.write(&signature.to_bytes())?;
+        packet_data.reset();
 
-        let announce_data = &buffer.as_slice()[address_hash_slice.len()..];
+        packet_data
+            .chain_write(pub_key)?
+            .chain_write(verifying_key)?
+            .chain_write(self.name.as_name_hash_slice())?
+            .chain_write(rand_hash)?
+            .chain_write(&signature.to_bytes())?;
+
+        if let Some(data) = app_data {
+            packet_data.write(data)?;
+        }
 
         Ok(Packet {
             header: Header {
@@ -178,14 +275,14 @@ impl<'a> Destination<'a, PrivateIdentity, Input, Single> {
             destination: self.address_hash,
             transport: None,
             context: PacketContext::None,
-            data: PacketDataBuffer::new_from_slice(announce_data),
+            data: packet_data,
         })
     }
 }
 
 impl<'a> Destination<'a, Identity, Output, Single> {
-    pub fn new(identity: &'a Identity, name: DestinationName<'a>) -> Self {
-        let address_hash = create_address_hash(identity, &name);
+    pub fn new(identity: Identity, name: DestinationName<'a>) -> Self {
+        let address_hash = create_address_hash(&identity, &name);
         Self {
             direction: PhantomData,
             r#type: PhantomData,
@@ -197,8 +294,8 @@ impl<'a> Destination<'a, Identity, Output, Single> {
 }
 
 impl<'a, D: Direction> Destination<'a, EmptyIdentity, D, Plain> {
-    pub fn new(identity: &'a EmptyIdentity, name: DestinationName<'a>) -> Self {
-        let address_hash = create_address_hash(identity, &name);
+    pub fn new(identity: EmptyIdentity, name: DestinationName<'a>) -> Self {
+        let address_hash = create_address_hash(&identity, &name);
         Self {
             direction: PhantomData,
             r#type: PhantomData,
@@ -236,6 +333,7 @@ mod tests {
     use crate::identity::PrivateIdentity;
     use crate::serde::Serialize;
 
+    use super::DestinationAnnounce;
     use super::DestinationName;
     use super::SingleInputDesination;
 
@@ -244,13 +342,10 @@ mod tests {
         let identity = PrivateIdentity::new_from_rand(OsRng);
 
         let single_in_destination =
-            SingleInputDesination::new(&identity, DestinationName::new("test", "in"));
-
-        let mut announce_packet_data = [0u8; 1024];
-        let mut buffer = OutputBuffer::new(&mut announce_packet_data);
+            SingleInputDesination::new(identity, DestinationName::new("test", "in"));
 
         let announce_packet = single_in_destination
-            .announce(OsRng, None, &mut buffer)
+            .announce(OsRng, None)
             .expect("valid announce packet");
 
         println!("Announce packet {}", announce_packet);
@@ -283,20 +378,18 @@ mod tests {
 
         let priv_identity = PrivateIdentity::new(priv_key.into(), sign_priv_key.into());
 
+        println!("identity hash {}", priv_identity.as_identity().address_hash);
+
         let destination = SingleInputDesination::new(
-            &priv_identity,
+            priv_identity,
             DestinationName::new("example_utilities", "announcesample.fruits"),
         );
 
-        println!("identity hash {}", priv_identity.as_identity().address_hash);
         println!("destination name hash {}", destination.name.hash);
         println!("destination hash {}", destination.address_hash);
 
-        let mut announce_packet_data = [0u8; 1024];
-        let mut buffer = OutputBuffer::new(&mut announce_packet_data);
-
         let announce = destination
-            .announce(OsRng, None, &mut buffer)
+            .announce(OsRng, None)
             .expect("valid announce packet");
 
         let mut output_data = [0u8; 4096];
@@ -305,5 +398,21 @@ mod tests {
         let _ = announce.serialize(&mut buffer).expect("correct data");
 
         println!("ANNOUNCE {}", buffer);
+    }
+
+    #[test]
+    fn check_announce() {
+        let priv_identity = PrivateIdentity::new_from_rand(OsRng);
+
+        let destination = SingleInputDesination::new(
+            priv_identity,
+            DestinationName::new("example_utilities", "announcesample.fruits"),
+        );
+
+        let announce = destination
+            .announce(OsRng, None)
+            .expect("valid announce packet");
+
+        DestinationAnnounce::validate(&announce).expect("valid announce");
     }
 }
