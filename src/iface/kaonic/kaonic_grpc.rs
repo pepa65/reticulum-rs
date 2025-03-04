@@ -5,7 +5,6 @@ pub mod proto {
 use proto::device_client::DeviceClient;
 use proto::radio_client::RadioClient;
 
-use tokio::sync::broadcast;
 use tokio::sync::mpsc;
 
 use tokio_stream::StreamExt;
@@ -18,7 +17,6 @@ use crate::serde::Serialize;
 
 use crate::iface::kaonic::RadioConfig;
 use crate::iface::kaonic::RadioModule;
-use crate::iface::Interface;
 
 const TX_BUFFER_SIZE: usize = 4096;
 
@@ -43,9 +41,7 @@ impl KaonicGrpc {
     pub async fn new(address: &str, module: RadioModule) -> Result<Self, RnsError> {
         let channel = Channel::from_shared(address.to_string())
             .unwrap()
-            .connect()
-            .await
-            .map_err(|_| RnsError::ConnectionError)?;
+            .connect_lazy();
 
         let radio_client = RadioClient::new(channel.clone());
 
@@ -141,17 +137,5 @@ impl KaonicGrpc {
             .map_err(|_| RnsError::ConnectionError)?;
 
         Ok(())
-    }
-}
-
-impl Interface for KaonicGrpc {
-    fn send(&mut self, packet: &Packet) -> Result<(), RnsError> {
-        tokio::runtime::Handle::current().block_on(self.transmit(packet))
-    }
-
-    fn recv(&mut self) -> Result<Packet, RnsError> {
-        tokio::runtime::Handle::current()
-            .block_on(self.packet_rx.recv())
-            .ok_or(RnsError::ConnectionError)
     }
 }
