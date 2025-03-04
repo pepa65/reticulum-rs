@@ -1,10 +1,14 @@
-pub mod hdlc;
-pub mod kaonic;
+use tokio::sync::broadcast;
 
-use crate::error::RnsError;
 use crate::packet::Packet;
 
-pub trait Interface {
-    fn send(&mut self, packet: &Packet) -> Result<(), RnsError>;
-    fn recv(&mut self) -> Result<Packet, RnsError>;
+pub mod hdlc;
+pub mod kaonic;
+pub mod tcp;
+
+
+pub struct PacketChannel {
+    pub in_tx: broadcast::Sender<Packet>,
+    pub out_rx: broadcast::Receiver<Packet>,
 }
+

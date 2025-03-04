@@ -203,6 +203,7 @@ impl fmt::Display for Header {
 
 pub type PacketDataBuffer = StaticBuffer<PACKET_MDU>;
 
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub struct PacketIfac {
     pub access_code: [u8; PACKET_IFAC_MAX_LENGTH],
     pub length: usize,
@@ -217,11 +218,13 @@ impl PacketIfac {
             length: slice.len(),
         }
     }
+
     pub fn as_slice(&self) -> &[u8] {
         &self.access_code[..self.length]
     }
 }
 
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub struct Packet {
     pub header: Header,
     pub ifac: Option<PacketIfac>,

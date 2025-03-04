@@ -1,15 +1,14 @@
 use alloc::sync::Arc;
 use core::marker::PhantomData;
 use rand_core::CryptoRngCore;
-
-use crate::iface::Interface;
+use tokio::sync::broadcast;
 
 use crate::{
-    async_io::{self, AsyncMytex},
     destination::{DestinationName, PlainOutputDesination},
     error::RnsError,
     hash::{AddressHash, Hash},
     identity::EmptyIdentity,
+    iface::PacketChannel,
     link::{Link, LinkStatus},
     packet::{self, Header, Packet, PacketContext, PacketDataBuffer},
 };
@@ -29,7 +28,7 @@ pub const PATH_REQUEST_DESTINATION_NAME: DestinationName = DestinationName {
 pub const PATH_REQUEST_DESTINATION: PlainOutputDesination = PlainOutputDesination {
     direction: PhantomData,
     r#type: PhantomData,
-    identity: &EmptyIdentity {},
+    identity: EmptyIdentity {},
     name: PATH_REQUEST_DESTINATION_NAME,
     address_hash: AddressHash::new([
         0x6b, 0x9f, 0x66, 0x01, 0x4d, 0x98, 0x53, 0xfa, 0xab, 0x22, 0x0f, 0xba, 0x47, 0xd0, 0x27,
@@ -37,17 +36,42 @@ pub const PATH_REQUEST_DESTINATION: PlainOutputDesination = PlainOutputDesinatio
     ]),
 };
 
-pub struct Transport<R: CryptoRngCore> {
-    pending_links: AsyncMytex<Vec<Arc<Link<R>>>>,
-    iface_list: Vec<Arc<dyn Interface>>,
+pub struct Transport {
+    in_packet_tx: broadcast::Sender<Packet>,
+    in_packet_rx: broadcast::Receiver<Packet>,
+    out_packet_tx: broadcast::Sender<Packet>,
+    out_packet_rx: broadcast::Receiver<Packet>,
 }
 
-impl<R: CryptoRngCore> Transport<R> {
-    pub fn new(iface_list: Vec<Arc<dyn Interface>>) -> Self {
+impl Transport {
+    pub fn new() -> Self {
+        let (out_packet_tx, out_packet_rx) = tokio::sync::broadcast::channel(32);
+        let (in_packet_tx, in_packet_rx) = tokio::sync::broadcast::channel(32);
+
         Self {
-            pending_links: AsyncMytex::new(Vec::new()),
-            iface_list,
+            out_packet_tx,
+            out_packet_rx,
+            in_packet_tx,
+            in_packet_rx,
         }
+    }
+
+    pub fn packet_channel(&self) -> PacketChannel {
+        PacketChannel {
+            in_tx: self.in_packet_tx.clone(),
+            out_rx: self.out_packet_tx.subscribe(),
+        }
+    }
+
+    pub fn recv(&self) -> broadcast::Receiver<Packet> {
+        self.in_packet_tx.subscribe()
+    }
+
+    pub fn send(&self, packet: Packet) -> Result<(), RnsError> {
+        self.out_packet_tx
+            .send(packet)
+            .map_err(|_| RnsError::ConnectionError)
+            .map(|_| ())
     }
 
     pub fn create_path_request(
@@ -74,16 +98,5 @@ impl<R: CryptoRngCore> Transport<R> {
             context: PacketContext::None,
             data,
         })
-    }
-}
-
-async fn update_pending_links<R: CryptoRngCore>(transport: Arc<Transport<R>>) {
-    loop {
-        {
-            let mut pending_links = transport.pending_links.lock().await;
-            pending_links.retain(|link| link.status() != LinkStatus::Closed);
-        }
-
-        async_io::async_sleep(core::time::Duration::from_secs(5)).await;
     }
 }
