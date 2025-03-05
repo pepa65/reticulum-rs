@@ -15,10 +15,10 @@ pub fn create_hash(data: &[u8], out: &mut [u8]) {
     );
 }
 
-#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone, Hash)]
 pub struct Hash([u8; HASH_SIZE]);
 
-#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone, Hash)]
 pub struct AddressHash([u8; ADDRESS_HASH_SIZE]);
 
 impl Hash {
@@ -60,6 +60,10 @@ impl Hash {
         &self.0
     }
 
+    pub fn to_bytes(&self) -> [u8; HASH_SIZE] {
+        self.0
+    }
+
     pub fn as_slice_mut(&mut self) -> &mut [u8] {
         &mut self.0
     }
@@ -87,7 +91,9 @@ impl AddressHash {
     }
 
     pub const fn new_empty() -> Self {
-        Self { 0: [0u8; ADDRESS_HASH_SIZE] }
+        Self {
+            0: [0u8; ADDRESS_HASH_SIZE],
+        }
     }
 
     pub fn as_slice(&self) -> &[u8] {
@@ -111,9 +117,11 @@ impl From<Hash> for AddressHash {
 
 impl fmt::Display for AddressHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "/")?;
         for data in self.0.iter() {
             write!(f, "{:0>2x}", data)?;
         }
+        write!(f, "/")?;
 
         Ok(())
     }

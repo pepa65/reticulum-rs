@@ -212,6 +212,20 @@ impl PrivateIdentity {
         Self::new(private_key, sign_key)
     }
 
+    pub fn new_from_name(name: &str) -> Self {
+        let hash = Hash::new_from_slice(name.as_bytes());
+        let private_key = StaticSecret::from(hash.to_bytes());
+
+        let hash = Hash::new_from_slice(hash.as_bytes());
+        let sign_key = SigningKey::from_bytes(hash.as_bytes());
+
+        Self::new(private_key, sign_key)
+    }
+
+    pub fn sign_key(&self) -> &SigningKey {
+        &self.sign_key
+    }
+
     pub fn into(&self) -> &Identity {
         &self.identity
     }
@@ -228,10 +242,8 @@ impl PrivateIdentity {
         self.identity.verify(data, signature)
     }
 
-    pub fn sign(&self, data: &[u8]) -> Result<Signature, RnsError> {
-        self.sign_key
-            .try_sign(data)
-            .map_err(|_| RnsError::IncorrectSignature)
+    pub fn sign(&self, data: &[u8]) -> Signature {
+        self.sign_key.try_sign(data).expect("signature")
     }
 
     pub fn exchange(&self, public_key: &PublicKey) -> SharedSecret {
@@ -257,7 +269,6 @@ impl EncryptIdentity for PrivateIdentity {
         derived_key: &DerivedKey,
         out_buf: &'a mut [u8],
     ) -> Result<&'a [u8], RnsError> {
-
         let mut out_offset = 0;
 
         let token = Fernet::new_from_slices(

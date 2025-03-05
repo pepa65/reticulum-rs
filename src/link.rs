@@ -1,9 +1,10 @@
 use std::time::{Duration, Instant};
 
-use ed25519_dalek::{Signature, PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
+use ed25519_dalek::{Signature, SigningKey, VerifyingKey, PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 use hkdf::Hkdf;
 use rand_core::OsRng;
 use sha2::Sha256;
+use x25519_dalek::StaticSecret;
 
 use crate::{
     buffer::OutputBuffer,
@@ -30,8 +31,8 @@ pub enum LinkStatus {
 
 pub type LinkId = AddressHash;
 
-impl From<Packet> for LinkId {
-    fn from(packet: Packet) -> Self {
+impl From<&Packet> for LinkId {
+    fn from(packet: &Packet) -> Self {
         packet.hash().into()
     }
 }
@@ -47,7 +48,6 @@ pub struct Link {
     priv_identity: PrivateIdentity,
     peer_identity: Identity,
     derived_key: DerivedKey,
-    fernet: Fernet<OsRng>,
     status: LinkStatus,
     request_time: Instant,
     rtt: Duration,
@@ -60,12 +60,41 @@ impl Link {
             destination,
             priv_identity: PrivateIdentity::new_from_rand(OsRng),
             peer_identity: Identity::default(),
-            fernet: Fernet::new_rand(OsRng),
             derived_key: DerivedKey::new_empty(),
             status: LinkStatus::Pending,
             request_time: Instant::now(),
             rtt: Duration::from_secs(0),
         }
+    }
+
+    pub fn new_from_request(
+        packet: &Packet,
+        signing_key: SigningKey,
+        destination: DestinationDesc,
+    ) -> Result<Self, RnsError> {
+        if packet.data.len() < PUBLIC_KEY_LENGTH * 2 {
+            return Err(RnsError::InvalidArgument);
+        }
+
+        let peer_identity = Identity::new_from_slices(
+            &packet.data.as_slice()[..PUBLIC_KEY_LENGTH],
+            &packet.data.as_slice()[PUBLIC_KEY_LENGTH..PUBLIC_KEY_LENGTH * 2],
+        );
+
+        let mut link = Self {
+            id: LinkId::from(packet),
+            destination,
+            priv_identity: PrivateIdentity::new(StaticSecret::random_from_rng(OsRng), signing_key),
+            peer_identity,
+            derived_key: DerivedKey::new_empty(),
+            status: LinkStatus::Pending,
+            request_time: Instant::now(),
+            rtt: Duration::from_secs(0),
+        };
+
+        link.handshake(peer_identity);
+
+        Ok(link)
     }
 
     pub fn request(&mut self) -> Packet {
@@ -87,8 +116,36 @@ impl Link {
         };
 
         self.status = LinkStatus::Pending;
-        self.id = LinkId::from(packet);
+        self.id = LinkId::from(&packet);
         self.request_time = Instant::now();
+
+        packet
+    }
+
+    pub fn prove(&mut self) -> Packet {
+        let mut packet_data = PacketDataBuffer::new();
+
+        packet_data.safe_write(self.id.as_slice());
+        packet_data.safe_write(self.priv_identity.as_identity().public_key.as_bytes());
+        packet_data.safe_write(self.priv_identity.as_identity().verifying_key.as_bytes());
+
+        let signature = self.priv_identity.sign(packet_data.as_slice());
+
+        packet_data.reset();
+        packet_data.safe_write(&signature.to_bytes()[..]);
+        packet_data.safe_write(self.priv_identity.as_identity().public_key.as_bytes());
+
+        let packet = Packet {
+            header: Header {
+                packet_type: PacketType::Proof,
+                ..Default::default()
+            },
+            ifac: None,
+            destination: self.id,
+            transport: None,
+            context: PacketContext::LinkRequestProof,
+            data: packet_data,
+        };
 
         packet
     }
@@ -163,7 +220,7 @@ impl Link {
         }
     }
 
-    pub fn handshake(&mut self, peer_identity: Identity) {
+    fn handshake(&mut self, peer_identity: Identity) {
         log::debug!("link: {} handshake", self.id);
 
         self.status = LinkStatus::Handshake;

@@ -1,12 +1,20 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 
 use tokio::sync::broadcast;
 
 use crate::destination::DestinationDesc;
+use crate::destination::DestinationHandleStatus;
+use crate::destination::DestinationName;
+use crate::destination::SingleInputDestination;
+use crate::hash::AddressHash;
+use crate::identity::PrivateIdentity;
 use crate::link::LinkHandleResult;
+use crate::packet::DestinationType;
+use crate::packet::PacketContext;
 use crate::{
     destination::SingleOutputDestination,
     error::RnsError,
@@ -42,8 +50,9 @@ use crate::{
 struct TransportHandler {
     in_packet_rx: broadcast::Receiver<Packet>,
     out_packet_tx: broadcast::Sender<Packet>,
-    single_out_destinations: Vec<SingleOutputDestination>,
+    single_in_destinations: HashMap<AddressHash, Arc<Mutex<SingleInputDestination>>>,
     out_links: Vec<Arc<Mutex<Link>>>,
+    in_links: HashMap<AddressHash, Arc<Mutex<Link>>>,
 }
 
 pub struct Transport {
@@ -60,8 +69,9 @@ impl Transport {
         let (in_packet_tx, in_packet_rx) = tokio::sync::broadcast::channel(32);
 
         let handler = Arc::new(Mutex::new(TransportHandler {
-            single_out_destinations: Vec::new(),
+            single_in_destinations: HashMap::new(),
             out_links: Vec::new(),
+            in_links: HashMap::new(),
             in_packet_rx: in_packet_tx.subscribe(),
             out_packet_tx: out_packet_tx.clone(),
         }));
@@ -118,6 +128,27 @@ impl Transport {
         link
     }
 
+    pub fn add_destination(
+        &mut self,
+        identity: PrivateIdentity,
+        name: DestinationName,
+    ) -> Arc<Mutex<SingleInputDestination>> {
+        let destination = SingleInputDestination::new(identity, name);
+        let address_hash = destination.desc.address_hash;
+
+        log::debug!("tp: add destination {}", address_hash);
+
+        let destination = Arc::new(Mutex::new(destination));
+
+        self.handler
+            .lock()
+            .unwrap()
+            .single_in_destinations
+            .insert(address_hash, destination.clone());
+
+        destination
+    }
+
     // pub fn create_path_request(
     //     destination_hash: &AddressHash,
     //     tag: Option<&[u8]>,
@@ -146,7 +177,7 @@ impl Transport {
 }
 
 fn handle_proof<'a>(packet: &Packet, handler: &MutexGuard<'a, TransportHandler>) {
-    log::trace!("tp: handle proof from /{}/", packet.destination);
+    log::trace!("tp: handle proof for {}", packet.destination);
 
     for link in &handler.out_links {
         let mut link = link.lock().unwrap();
@@ -156,6 +187,54 @@ fn handle_proof<'a>(packet: &Packet, handler: &MutexGuard<'a, TransportHandler>)
                 handler.out_packet_tx.send(rtt_packet).unwrap();
             }
             _ => {}
+        }
+    }
+}
+
+fn handle_data<'a>(packet: &Packet, handler: &mut MutexGuard<'a, TransportHandler>) {
+    log::trace!(
+        "tp: handle data request for {} dst={:2x} ctx={:2x}",
+        packet.destination,
+        packet.header.destination_type as u8,
+        packet.context as u8,
+    );
+
+    if packet.header.destination_type == DestinationType::Link {
+        if let Some(link) = handler.in_links.get(&packet.destination).cloned() {
+            let mut link = link.lock().unwrap();
+            if packet.context == PacketContext::LinkRTT {}
+        }
+    }
+
+    if packet.header.destination_type == DestinationType::Single {
+        if let Some(destination) = handler
+            .single_in_destinations
+            .get(&packet.destination)
+            .cloned()
+        {
+
+            // todo
+        }
+    }
+}
+
+fn handle_link_request<'a>(packet: &Packet, handler: &mut MutexGuard<'a, TransportHandler>) {
+    log::trace!("tp: handle link request for {}", packet.destination);
+
+    if let Some(destination) = handler
+        .single_in_destinations
+        .get(&packet.destination)
+        .cloned()
+    {
+        let mut destination = destination.lock().unwrap();
+        match destination.handle_packet(packet) {
+            DestinationHandleStatus::LinkProof(link, packet) => {
+                handler.out_packet_tx.send(packet).unwrap();
+                handler
+                    .in_links
+                    .insert(*link.id(), Arc::new(Mutex::new(link)));
+            }
+            DestinationHandleStatus::None => {}
         }
     }
 }
@@ -171,15 +250,12 @@ async fn manage_transport(handler: Arc<Mutex<TransportHandler>>) {
             recv = in_packet_rx.recv() => {
                 if let Ok(packet) = recv {
 
-                    log::trace!("{}", packet);
-
+                let handler = &mut handler.lock().unwrap();
                     match packet.header.packet_type {
-                        PacketType::Announce => {
-
-                        },
-                        PacketType::Proof => {
-                            handle_proof(&packet, &handler.lock().unwrap());
-                        },
+                        PacketType::Announce => { }
+                        PacketType::LinkRequest => handle_link_request(&packet, handler),
+                        PacketType::Proof => handle_proof(&packet, handler),
+                        PacketType::Data => handle_data(&packet, handler),
                         _ => {}
                     }
                 }

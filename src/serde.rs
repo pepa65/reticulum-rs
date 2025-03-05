@@ -2,7 +2,7 @@ use crate::{
     buffer::{InputBuffer, OutputBuffer, StaticBuffer},
     error::RnsError,
     hash::AddressHash,
-    packet::{Header, Packet, PacketContext, PropagationType},
+    packet::{Header, HeaderType, Packet, PacketContext, PropagationType},
 };
 
 pub trait Serialize {
@@ -30,11 +30,13 @@ impl Serialize for Packet {
     fn serialize(&self, buffer: &mut OutputBuffer) -> Result<usize, RnsError> {
         self.header.serialize(buffer)?;
 
-        self.destination.serialize(buffer)?;
-
-        if let Some(transport) = &self.transport {
-            transport.serialize(buffer)?;
+        if self.header.header_type == HeaderType::Type2 {
+            if let Some(transport) = &self.transport {
+                transport.serialize(buffer)?;
+            }
         }
+
+        self.destination.serialize(buffer)?;
 
         self.context.serialize(buffer)?;
 
@@ -70,13 +72,13 @@ impl Packet {
     pub fn deserialize(buffer: &mut InputBuffer) -> Result<Packet, RnsError> {
         let header = Header::deserialize(buffer)?;
 
-        let destination = AddressHash::deserialize(buffer)?;
-
-        let transport = if header.propagation_type == PropagationType::Transport {
+        let transport = if header.header_type == HeaderType::Type2 {
             Some(AddressHash::deserialize(buffer)?)
         } else {
             None
         };
+
+        let destination = AddressHash::deserialize(buffer)?;
 
         let context = PacketContext::deserialize(buffer)?;
 

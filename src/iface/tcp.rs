@@ -122,7 +122,7 @@ impl TcpClientHandler {
 
                 Ok(packet) = packet_channel.out_rx.recv() => {
                     let mut output = OutputBuffer::new(&mut tx_buffer);
-                    // log::trace!("tcp_client: >> tx /{}/", packet.destination);
+                    // log::trace!("tcp_client: >> tx {}", packet.destination);
                     if let Ok(_) = packet.serialize(&mut output) {
 
                         let mut hdlc_output = OutputBuffer::new(&mut hdlc_tx_buffer[..]);

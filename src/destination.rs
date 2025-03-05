@@ -9,6 +9,7 @@ use crate::{
         DecryptIdentity, EmptyIdentity, EncryptIdentity, HashIdentity, Identity, PrivateIdentity,
         PUBLIC_KEY_LENGTH,
     },
+    link,
     packet::{
         self, DestinationType, Header, HeaderType, IfacFlag, Packet, PacketContext,
         PacketDataBuffer, PacketType, PropagationType,
@@ -224,6 +225,11 @@ impl<I: HashIdentity, D: Direction, T: Type> Destination<I, D, T> {
 //     }
 // }
 
+pub enum DestinationHandleStatus {
+    None,
+    LinkProof(link::Link, Packet),
+}
+
 impl Destination<PrivateIdentity, Input, Single> {
     pub fn new(identity: PrivateIdentity, name: DestinationName) -> Self {
         let address_hash = create_address_hash(&identity, &name);
@@ -265,7 +271,7 @@ impl Destination<PrivateIdentity, Input, Single> {
             packet_data.write(data)?;
         }
 
-        let signature = self.identity.sign(packet_data.as_slice())?;
+        let signature = self.identity.sign(packet_data.as_slice());
 
         packet_data.reset();
 
@@ -295,6 +301,28 @@ impl Destination<PrivateIdentity, Input, Single> {
             context: PacketContext::None,
             data: packet_data,
         })
+    }
+
+    pub fn handle_packet(&mut self, packet: &Packet) -> DestinationHandleStatus {
+        if self.desc.address_hash != packet.destination {
+            return DestinationHandleStatus::None;
+        }
+
+        match packet.header.packet_type {
+            PacketType::LinkRequest => {
+                if let Ok(mut new_link) = link::Link::new_from_request(
+                    packet,
+                    self.identity.sign_key().clone(),
+                    self.desc,
+                ) {
+                    let packet = new_link.prove();
+                    return DestinationHandleStatus::LinkProof(new_link, packet);
+                }
+            }
+            _ => {}
+        }
+
+        DestinationHandleStatus::None
     }
 }
 
