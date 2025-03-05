@@ -164,6 +164,19 @@ pub struct Header {
     pub hops: u8,
 }
 
+impl Default for Header {
+    fn default() -> Self {
+        Self {
+            ifac_flag: IfacFlag::Open,
+            header_type: HeaderType::Type1,
+            propagation_type: PropagationType::Broadcast,
+            destination_type: DestinationType::Single,
+            packet_type: PacketType::Data,
+            hops: 0,
+        }
+    }
+}
+
 impl Header {
     pub fn to_meta(&self) -> u8 {
         let meta = (self.ifac_flag as u8) << 7

@@ -1,7 +1,9 @@
 use rand_core::OsRng;
+
 use reticulum::destination::{DestinationAnnounce, DestinationName, SingleInputDestination};
 use reticulum::identity::PrivateIdentity;
 use reticulum::iface::tcp::{TcpClient, TcpClientConfig};
+use reticulum::link::Link;
 use reticulum::transport::Transport;
 
 #[tokio::main]
@@ -23,23 +25,12 @@ async fn main() {
 
     let id = PrivateIdentity::new_from_rand(OsRng);
 
-    let destination = SingleInputDestination::new(id, DestinationName::new("example", "app"));
-
-    transport
-        .send(destination.announce(OsRng, None).expect("announce packet"))
-        .expect("send announce");
-
     let mut recv = transport.recv();
     loop {
         if let Ok(packet) = recv.recv().await {
-            log::debug!("packet {}", packet);
-            match DestinationAnnounce::validate(&packet) {
-                Ok(_) => {
-                    log::info!("announce {}", packet.destination);
-                }
-                Err(_) => {
-                    log::error!("announce not valid");
-                }
+            if let Ok(dest) = DestinationAnnounce::validate(&packet) {
+                log::debug!("destination announce {}", packet);
+                let link = transport.link(dest.desc);
             }
         }
     }

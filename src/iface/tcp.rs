@@ -34,7 +34,10 @@ pub struct TcpClient {
 }
 
 impl TcpClient {
-    pub async fn new(config: TcpClientConfig, packet_channel: PacketChannel) -> Result<Self, RnsError> {
+    pub async fn new(
+        config: TcpClientConfig,
+        packet_channel: PacketChannel,
+    ) -> Result<Self, RnsError> {
         let cancel_token = CancellationToken::new();
 
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<ClientCommand>(4);
@@ -101,6 +104,7 @@ impl TcpClientHandler {
                                             let mut output = OutputBuffer::new(&mut hdlc_rx_buffer[..]);
                                             if let Ok(_) = Hdlc::decode(&rx_buffer[..n], &mut output) {
                                                 if let Ok(packet) = Packet::deserialize(&mut InputBuffer::new(output.as_slice())) {
+                                                    // log::trace!("tcp_client: << rx /{}/", packet.destination);
                                                     let _ = packet_channel.in_tx.send(packet);
                                                 } else {
                                                     log::warn!("tcp_client: couldn't decode hdlc frame");
@@ -118,6 +122,7 @@ impl TcpClientHandler {
 
                 Ok(packet) = packet_channel.out_rx.recv() => {
                     let mut output = OutputBuffer::new(&mut tx_buffer);
+                    // log::trace!("tcp_client: >> tx /{}/", packet.destination);
                     if let Ok(_) = packet.serialize(&mut output) {
 
                         let mut hdlc_output = OutputBuffer::new(&mut hdlc_tx_buffer[..]);

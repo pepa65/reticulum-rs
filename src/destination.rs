@@ -3,7 +3,6 @@ use rand_core::CryptoRngCore;
 use x25519_dalek::PublicKey;
 
 use crate::{
-    buffer::{InputBuffer, OutputBuffer},
     error::RnsError,
     hash::{AddressHash, Hash},
     identity::{
@@ -16,9 +15,9 @@ use crate::{
     },
 };
 
-use sha2::{Digest, Sha512};
+use sha2::Digest;
 
-use core::marker::PhantomData;
+use core::{fmt, marker::PhantomData};
 
 //***************************************************************************//
 
@@ -70,14 +69,15 @@ pub const RAND_HASH_LENGTH: usize = 10;
 pub const MIN_ANNOUNCE_DATA_LENGTH: usize =
     PUBLIC_KEY_LENGTH * 2 + NAME_HASH_LENGTH + RAND_HASH_LENGTH + SIGNATURE_LENGTH;
 
-pub struct DestinationName<'a> {
-    pub app_name: &'a str,
-    pub aspects: &'a str,
+#[derive(Copy, Clone)]
+pub struct DestinationName {
+    // pub app_name: &'a str,
+    // pub aspects: &'a str,
     pub hash: Hash,
 }
 
-impl<'a> DestinationName<'a> {
-    pub fn new(app_name: &'a str, aspects: &'a str) -> Self {
+impl DestinationName {
+    pub fn new(app_name: &str, aspects: &str) -> Self {
         let hash = Hash::new(
             Hash::generator()
                 .chain_update(app_name.as_bytes())
@@ -87,11 +87,7 @@ impl<'a> DestinationName<'a> {
                 .into(),
         );
 
-        Self {
-            app_name,
-            aspects,
-            hash,
-        }
+        Self { hash }
     }
 
     pub fn new_from_hash_slice(hash_slice: &[u8]) -> Self {
@@ -99,8 +95,6 @@ impl<'a> DestinationName<'a> {
         hash[..hash_slice.len()].copy_from_slice(hash_slice);
 
         Self {
-            app_name: "",
-            aspects: "",
             hash: Hash::new(hash),
         }
     }
@@ -110,10 +104,25 @@ impl<'a> DestinationName<'a> {
     }
 }
 
+#[derive(Copy, Clone)]
+pub struct DestinationDesc {
+    pub identity: Identity,
+    pub address_hash: AddressHash,
+    pub name: DestinationName,
+}
+
+impl fmt::Display for DestinationDesc {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "/{}/", self.address_hash)?;
+
+        Ok(())
+    }
+}
+
 pub type DestinationAnnounce = Packet;
 
 impl DestinationAnnounce {
-    pub fn validate(packet: &Packet) -> Result<SingleOutputDesination, RnsError> {
+    pub fn validate(packet: &Packet) -> Result<SingleOutputDestination, RnsError> {
         if packet.header.packet_type != PacketType::Announce {
             return Err(RnsError::PacketError);
         }
@@ -168,58 +177,67 @@ impl DestinationAnnounce {
 
         identity.verify(signed_data.as_slice(), &signature)?;
 
-        Ok(SingleOutputDesination::new(
+        Ok(SingleOutputDestination::new(
             identity,
             DestinationName::new_from_hash_slice(name_hash),
         ))
     }
 }
 
-pub struct Destination<'a, I: HashIdentity, D: Direction, T: Type> {
+pub struct Destination<I: HashIdentity, D: Direction, T: Type> {
     pub direction: PhantomData<D>,
     pub r#type: PhantomData<T>,
     pub identity: I,
-    pub name: DestinationName<'a>,
-    pub address_hash: AddressHash,
+    pub desc: DestinationDesc,
 }
 
-impl<'a, I: HashIdentity, D: Direction, T: Type> Destination<'a, I, D, T> {
+impl<I: HashIdentity, D: Direction, T: Type> Destination<I, D, T> {
     pub fn destination_type(&self) -> packet::DestinationType {
         <T as Type>::destination_type()
     }
 }
 
-impl<'a, I: DecryptIdentity + HashIdentity, T: Type> Destination<'a, I, Input, T> {
-    pub fn decrypt<'b, R: CryptoRngCore + Copy>(
-        &self,
-        rng: R,
-        data: &[u8],
-        out_buf: &'b mut [u8],
-    ) -> Result<&'b [u8], RnsError> {
-        self.identity.decrypt(rng, data, out_buf)
-    }
-}
+// impl<I: DecryptIdentity + HashIdentity, T: Type> Destination<I, Input, T> {
+//     pub fn decrypt<'b, R: CryptoRngCore + Copy>(
+//         &self,
+//         rng: R,
+//         data: &[u8],
+//         out_buf: &'b mut [u8],
+//     ) -> Result<&'b [u8], RnsError> {
+//         self.identity.decrypt(rng, data, out_buf)
+//     }
+// }
 
-impl<'a, I: EncryptIdentity + HashIdentity, D: Direction, T: Type> Destination<'a, I, D, T> {
-    pub fn encrypt<'b, R: CryptoRngCore + Copy>(
-        &self,
-        rng: R,
-        text: &[u8],
-        out_buf: &'b mut [u8],
-    ) -> Result<&'b [u8], RnsError> {
-        self.identity.encrypt(rng, text, out_buf)
-    }
-}
+// impl<I: EncryptIdentity + HashIdentity, D: Direction, T: Type> Destination<I, D, T> {
+//     pub fn encrypt<'b, R: CryptoRngCore + Copy>(
+//         &self,
+//         rng: R,
+//         text: &[u8],
+//         out_buf: &'b mut [u8],
+//     ) -> Result<&'b [u8], RnsError> {
+//         // self.identity.encrypt(
+//         //     rng,
+//         //     text,
+//         //     Some(self.identity.as_address_hash_slice()),
+//         //     out_buf,
+//         // )
+//     }
+// }
 
-impl<'a> Destination<'a, PrivateIdentity, Input, Single> {
-    pub fn new(identity: PrivateIdentity, name: DestinationName<'a>) -> Self {
+impl Destination<PrivateIdentity, Input, Single> {
+    pub fn new(identity: PrivateIdentity, name: DestinationName) -> Self {
         let address_hash = create_address_hash(&identity, &name);
+        let pub_identity = identity.as_identity().clone();
+
         Self {
             direction: PhantomData,
             r#type: PhantomData,
             identity,
-            name,
-            address_hash,
+            desc: DestinationDesc {
+                identity: pub_identity,
+                name,
+                address_hash,
+            },
         }
     }
 
@@ -237,10 +255,10 @@ impl<'a> Destination<'a, PrivateIdentity, Input, Single> {
         let verifying_key = self.identity.as_identity().verifying_key_bytes();
 
         packet_data
-            .chain_write(self.address_hash.as_slice())?
+            .chain_write(self.desc.address_hash.as_slice())?
             .chain_write(pub_key)?
             .chain_write(verifying_key)?
-            .chain_write(self.name.as_name_hash_slice())?
+            .chain_write(self.desc.name.as_name_hash_slice())?
             .chain_write(rand_hash)?;
 
         if let Some(data) = app_data {
@@ -254,7 +272,7 @@ impl<'a> Destination<'a, PrivateIdentity, Input, Single> {
         packet_data
             .chain_write(pub_key)?
             .chain_write(verifying_key)?
-            .chain_write(self.name.as_name_hash_slice())?
+            .chain_write(self.desc.name.as_name_hash_slice())?
             .chain_write(rand_hash)?
             .chain_write(&signature.to_bytes())?;
 
@@ -272,7 +290,7 @@ impl<'a> Destination<'a, PrivateIdentity, Input, Single> {
                 hops: 0,
             },
             ifac: None,
-            destination: self.address_hash,
+            destination: self.desc.address_hash,
             transport: None,
             context: PacketContext::None,
             data: packet_data,
@@ -280,36 +298,39 @@ impl<'a> Destination<'a, PrivateIdentity, Input, Single> {
     }
 }
 
-impl<'a> Destination<'a, Identity, Output, Single> {
-    pub fn new(identity: Identity, name: DestinationName<'a>) -> Self {
+impl Destination<Identity, Output, Single> {
+    pub fn new(identity: Identity, name: DestinationName) -> Self {
         let address_hash = create_address_hash(&identity, &name);
         Self {
             direction: PhantomData,
             r#type: PhantomData,
             identity,
-            name,
-            address_hash,
+            desc: DestinationDesc {
+                identity,
+                name,
+                address_hash,
+            },
         }
     }
 }
 
-impl<'a, D: Direction> Destination<'a, EmptyIdentity, D, Plain> {
-    pub fn new(identity: EmptyIdentity, name: DestinationName<'a>) -> Self {
+impl<D: Direction> Destination<EmptyIdentity, D, Plain> {
+    pub fn new(identity: EmptyIdentity, name: DestinationName) -> Self {
         let address_hash = create_address_hash(&identity, &name);
         Self {
             direction: PhantomData,
             r#type: PhantomData,
             identity,
-            name,
-            address_hash,
+            desc: DestinationDesc {
+                identity: Default::default(),
+                name,
+                address_hash,
+            },
         }
     }
 }
 
-fn create_address_hash<'a, I: HashIdentity>(
-    identity: &I,
-    name: &DestinationName<'a>,
-) -> AddressHash {
+fn create_address_hash<I: HashIdentity>(identity: &I, name: &DestinationName) -> AddressHash {
     AddressHash::new_from_hash(&Hash::new(
         Hash::generator()
             .chain_update(name.as_name_hash_slice())
@@ -319,10 +340,10 @@ fn create_address_hash<'a, I: HashIdentity>(
     ))
 }
 
-pub type SingleInputDesination<'a> = Destination<'a, PrivateIdentity, Input, Single>;
-pub type SingleOutputDesination<'a> = Destination<'a, Identity, Output, Single>;
-pub type PlainInputDesination<'a> = Destination<'a, EmptyIdentity, Input, Plain>;
-pub type PlainOutputDesination<'a> = Destination<'a, EmptyIdentity, Output, Plain>;
+pub type SingleInputDestination = Destination<PrivateIdentity, Input, Single>;
+pub type SingleOutputDestination = Destination<Identity, Output, Single>;
+pub type PlainInputDestination = Destination<EmptyIdentity, Input, Plain>;
+pub type PlainOutputDestination = Destination<EmptyIdentity, Output, Plain>;
 
 #[cfg(test)]
 mod tests {
@@ -335,14 +356,14 @@ mod tests {
 
     use super::DestinationAnnounce;
     use super::DestinationName;
-    use super::SingleInputDesination;
+    use super::SingleInputDestination;
 
     #[test]
     fn create_announce() {
         let identity = PrivateIdentity::new_from_rand(OsRng);
 
         let single_in_destination =
-            SingleInputDesination::new(identity, DestinationName::new("test", "in"));
+            SingleInputDestination::new(identity, DestinationName::new("test", "in"));
 
         let announce_packet = single_in_destination
             .announce(OsRng, None)
@@ -380,13 +401,13 @@ mod tests {
 
         println!("identity hash {}", priv_identity.as_identity().address_hash);
 
-        let destination = SingleInputDesination::new(
+        let destination = SingleInputDestination::new(
             priv_identity,
             DestinationName::new("example_utilities", "announcesample.fruits"),
         );
 
-        println!("destination name hash {}", destination.name.hash);
-        println!("destination hash {}", destination.address_hash);
+        println!("destination name hash {}", destination.desc.name.hash);
+        println!("destination hash {}", destination.desc.address_hash);
 
         let announce = destination
             .announce(OsRng, None)
@@ -404,7 +425,7 @@ mod tests {
     fn check_announce() {
         let priv_identity = PrivateIdentity::new_from_rand(OsRng);
 
-        let destination = SingleInputDesination::new(
+        let destination = SingleInputDestination::new(
             priv_identity,
             DestinationName::new("example_utilities", "announcesample.fruits"),
         );

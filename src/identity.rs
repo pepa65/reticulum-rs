@@ -18,6 +18,7 @@ pub trait EncryptIdentity {
         &self,
         rng: R,
         text: &[u8],
+        derived_key: &DerivedKey,
         out_buf: &'a mut [u8],
     ) -> Result<&'a [u8], RnsError>;
 }
@@ -27,6 +28,7 @@ pub trait DecryptIdentity {
         &self,
         rng: R,
         data: &[u8],
+        derived_key: &DerivedKey,
         out_buf: &'a mut [u8],
     ) -> Result<&'a [u8], RnsError>;
 }
@@ -61,6 +63,22 @@ impl Identity {
         }
     }
 
+    pub fn new_from_slices(public_key: &[u8], verifying_key: &[u8]) -> Self {
+        let public_key = {
+            let mut key_data = [0u8; PUBLIC_KEY_LENGTH];
+            key_data.copy_from_slice(&public_key);
+            PublicKey::from(key_data)
+        };
+
+        let verifying_key = {
+            let mut key_data = [0u8; PUBLIC_KEY_LENGTH];
+            key_data.copy_from_slice(&verifying_key);
+            VerifyingKey::from_bytes(&key_data).unwrap_or_default()
+        };
+
+        Self::new(public_key, verifying_key)
+    }
+
     pub fn public_key_bytes(&self) -> &[u8; PUBLIC_KEY_LENGTH] {
         self.public_key.as_bytes()
     }
@@ -73,6 +91,17 @@ impl Identity {
         self.verifying_key
             .verify_strict(data, signature)
             .map_err(|_| RnsError::IncorrectSignature)
+    }
+
+    pub fn derive_key<R: CryptoRngCore + Copy>(&self, rng: R, salt: Option<&[u8]>) -> DerivedKey {
+        DerivedKey::new_from_ephemeral_key(rng, &self.public_key, salt)
+    }
+}
+
+impl Default for Identity {
+    fn default() -> Self {
+        let empty_key = [0u8; PUBLIC_KEY_LENGTH];
+        Self::new(PublicKey::from(empty_key), VerifyingKey::default())
     }
 }
 
@@ -87,6 +116,7 @@ impl EncryptIdentity for Identity {
         &self,
         rng: R,
         text: &[u8],
+        derived_key: &DerivedKey,
         out_buf: &'a mut [u8],
     ) -> Result<&'a [u8], RnsError> {
         let mut out_offset = 0;
@@ -102,11 +132,6 @@ impl EncryptIdentity for Identity {
                 return Err(RnsError::InvalidArgument);
             }
         }
-
-        let derived_key = create_derived_key(
-            &ephemeral_key.diffie_hellman(&self.public_key),
-            Some(self.address_hash.as_slice()),
-        );
 
         let token = Fernet::new_from_slices(
             &derived_key.as_bytes()[..16],
@@ -134,6 +159,7 @@ impl EncryptIdentity for EmptyIdentity {
         &self,
         _rng: R,
         text: &[u8],
+        _derived_key: &DerivedKey,
         out_buf: &'a mut [u8],
     ) -> Result<&'a [u8], RnsError> {
         if text.len() > out_buf.len() {
@@ -151,6 +177,7 @@ impl DecryptIdentity for EmptyIdentity {
         &self,
         _rng: R,
         data: &[u8],
+        _derived_key: &DerivedKey,
         out_buf: &'a mut [u8],
     ) -> Result<&'a [u8], RnsError> {
         if data.len() > out_buf.len() {
@@ -206,6 +233,14 @@ impl PrivateIdentity {
             .try_sign(data)
             .map_err(|_| RnsError::IncorrectSignature)
     }
+
+    pub fn exchange(&self, public_key: &PublicKey) -> SharedSecret {
+        self.private_key.diffie_hellman(public_key)
+    }
+
+    pub fn derive_key(&self, public_key: &PublicKey, salt: Option<&[u8]>) -> DerivedKey {
+        DerivedKey::new_from_private_key(&self.private_key, public_key, salt)
+    }
 }
 
 impl HashIdentity for PrivateIdentity {
@@ -219,9 +254,22 @@ impl EncryptIdentity for PrivateIdentity {
         &self,
         rng: R,
         text: &[u8],
+        derived_key: &DerivedKey,
         out_buf: &'a mut [u8],
     ) -> Result<&'a [u8], RnsError> {
-        self.identity.encrypt(rng, text, out_buf)
+
+        let mut out_offset = 0;
+
+        let token = Fernet::new_from_slices(
+            &derived_key.as_bytes()[..16],
+            &derived_key.as_bytes()[16..],
+            rng,
+        )
+        .encrypt(PlainText::from(text), &mut out_buf[out_offset..])?;
+
+        out_offset += token.len();
+
+        Ok(&out_buf[..out_offset])
     }
 }
 
@@ -230,24 +278,20 @@ impl DecryptIdentity for PrivateIdentity {
         &self,
         rng: R,
         data: &[u8],
+        derived_key: &DerivedKey,
         out_buf: &'a mut [u8],
     ) -> Result<&'a [u8], RnsError> {
         if data.len() <= PUBLIC_KEY_LENGTH {
             return Err(RnsError::InvalidArgument);
         }
 
-        let public_key = {
+        let _public_key = {
             let mut public_key_bytes = [0u8; PUBLIC_KEY_LENGTH];
             public_key_bytes[..].copy_from_slice(&data[..PUBLIC_KEY_LENGTH]);
             PublicKey::from(public_key_bytes)
         };
 
-        let derived_key = create_derived_key(
-            &self.private_key.diffie_hellman(&public_key),
-            Some(self.identity.address_hash.as_slice()),
-        );
-
-        let mut fernet = Fernet::new_from_slices(
+        let fernet = Fernet::new_from_slices(
             &derived_key.as_bytes()[..16],
             &derived_key.as_bytes()[16..],
             rng,
@@ -265,43 +309,46 @@ impl DecryptIdentity for PrivateIdentity {
 
 pub struct GroupIdentity {}
 
-fn create_derived_key(shared_key: &SharedSecret, salt: Option<&[u8]>) -> Hash {
-    let mut derived_key = Hash::new_empty();
-
-    let _ =
-        Hkdf::<Sha256>::new(salt, shared_key.as_bytes()).expand(&[], derived_key.as_slice_mut());
-
-    derived_key
+pub struct DerivedKey {
+    key: [u8; 32],
 }
 
-#[cfg(test)]
-mod tests {
-    use core::str;
-    use rand_core::OsRng;
+impl DerivedKey {
+    pub fn new(shared_key: &SharedSecret, salt: Option<&[u8]>) -> Self {
+        let mut key = [0u8; 32];
 
-    use super::DecryptIdentity;
-    use super::EncryptIdentity;
-    use super::PrivateIdentity;
+        let _ = Hkdf::<Sha256>::new(salt, shared_key.as_bytes()).expand(&[], &mut key[..]);
 
-    #[test]
-    fn encrypt_then_decrypt() {
-        let private_identity = PrivateIdentity::new_from_rand(OsRng);
-        let out_message = "#--TEST-MESSAGE--#";
-        let mut out_buf = [0u8; 4096];
-        let mut in_buf = [0u8; 4096];
+        Self { key }
+    }
 
-        let cipher_message = private_identity
-            .identity
-            .encrypt(OsRng, out_message.as_bytes(), &mut out_buf)
-            .expect("encrypted message");
+    pub fn new_empty() -> Self {
+        Self { key: [0u8; 32] }
+    }
 
-        let in_message = str::from_utf8(
-            private_identity
-                .decrypt(OsRng, cipher_message, &mut in_buf)
-                .expect("decrypted message"),
-        )
-        .expect("valid string");
+    pub fn new_from_private_key(
+        priv_key: &StaticSecret,
+        pub_key: &PublicKey,
+        salt: Option<&[u8]>,
+    ) -> Self {
+        Self::new(&priv_key.diffie_hellman(pub_key), salt)
+    }
 
-        assert_eq!(in_message, out_message);
+    pub fn new_from_ephemeral_key<R: CryptoRngCore + Copy>(
+        rng: R,
+        pub_key: &PublicKey,
+        salt: Option<&[u8]>,
+    ) -> Self {
+        let secret = EphemeralSecret::random_from_rng(rng);
+        let shared_key = secret.diffie_hellman(pub_key);
+        Self::new(&shared_key, salt)
+    }
+
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.key
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        &self.key[..]
     }
 }

@@ -1,6 +1,3 @@
-use std::io::Read;
-use std::io::Write;
-
 use crate::{buffer::OutputBuffer, error::RnsError};
 
 const HDLC_FRAME_FLAG: u8 = 0x7e;

@@ -1,4 +1,5 @@
 use core::fmt;
+use core::cmp::min;
 
 use crate::error::RnsError;
 
@@ -26,6 +27,10 @@ impl<const N: usize> StaticBuffer<N> {
 
     pub fn reset(&mut self) {
         self.len = 0;
+    }
+
+    pub fn resize(&mut self, len: usize) {
+        self.len = min(len, self.buffer.len());
     }
 
     pub fn len(&self) -> usize {
@@ -89,6 +94,11 @@ impl<const N: usize> StaticBuffer<N> {
 
     pub fn accuire_buf(&mut self, len: usize) -> &mut [u8] {
         self.len = len;
+        &mut self.buffer[..self.len]
+    }
+
+    pub fn accuire_buf_max(&mut self) -> &mut [u8] {
+        self.len = self.buffer.len();
         &mut self.buffer[..self.len]
     }
 }

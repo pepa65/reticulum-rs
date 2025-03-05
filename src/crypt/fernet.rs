@@ -8,7 +8,7 @@ use aes::cipher::Unsigned;
 use cbc::cipher::BlockEncryptMut;
 use cbc::cipher::KeyIvInit;
 use crypto_common::{IvSizeUser, KeyInit, KeySizeUser, OutputSizeUser};
-use hmac::Mac;
+use hmac::{Hmac, Mac};
 use rand_core::CryptoRngCore;
 use sha2::Sha256;
 
@@ -16,7 +16,7 @@ use crate::error::RnsError;
 
 type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
 type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
-type HmacSha256 = hmac::Hmac<Sha256>;
+type HmacSha256 = Hmac<Sha256>;
 
 const HMAC_KEY_SIZE: usize = <<HmacSha256 as KeySizeUser>::KeySize as Unsigned>::USIZE;
 const HMAC_OUT_SIZE: usize = <<HmacSha256 as OutputSizeUser>::OutputSize as Unsigned>::USIZE;
@@ -37,7 +37,7 @@ pub struct Token<'a>(&'a [u8]);
 // implementation, since they incur overhead and leak initiator metadata.
 pub struct Fernet<R: CryptoRngCore> {
     rng: R,
-    sign_key: Key<HmacSha256>,
+    sign_key: [u8; 16],
     enc_key: Key<aes::Aes128>,
 }
 
@@ -63,6 +63,9 @@ impl<'a> Token<'a> {
     pub fn as_bytes(&self) -> &'a [u8] {
         self.0
     }
+    pub fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 impl<'a> From<&'a [u8]> for Token<'a> {
@@ -71,8 +74,8 @@ impl<'a> From<&'a [u8]> for Token<'a> {
     }
 }
 
-impl<R: CryptoRngCore> Fernet<R> {
-    pub fn new(sign_key: Key<HmacSha256>, enc_key: Key<aes::Aes128>, rng: R) -> Self {
+impl<R: CryptoRngCore + Copy> Fernet<R> {
+    pub fn new(sign_key: [u8; 16], enc_key: Key<aes::Aes128>, rng: R) -> Self {
         Self {
             rng,
             sign_key,
@@ -81,8 +84,8 @@ impl<R: CryptoRngCore> Fernet<R> {
     }
 
     pub fn new_from_slices(sign_key: &[u8], enc_key: &[u8], rng: R) -> Self {
-        let mut sign_key_bytes = [0u8; HMAC_KEY_SIZE];
-        sign_key_bytes[..cmp::min(HMAC_OUT_SIZE, sign_key.len())].copy_from_slice(sign_key);
+        let mut sign_key_bytes = [0u8; 16];
+        sign_key_bytes[..cmp::min(16, sign_key.len())].copy_from_slice(sign_key);
 
         let mut enc_key_bytes = [0u8; AES_KEY_SIZE];
         enc_key_bytes[..cmp::min(AES_KEY_SIZE, enc_key.len())].copy_from_slice(enc_key);
@@ -95,7 +98,8 @@ impl<R: CryptoRngCore> Fernet<R> {
     }
 
     pub fn new_rand(mut rng: R) -> Self {
-        let sign_key = HmacSha256::generate_key(&mut rng);
+        let mut sign_key = [0u8; 16];
+        rng.fill_bytes(&mut sign_key);
         let enc_key = Aes128CbcEnc::generate_key(&mut rng);
 
         Self {
@@ -106,7 +110,7 @@ impl<R: CryptoRngCore> Fernet<R> {
     }
 
     pub fn encrypt<'a>(
-        &mut self,
+        &self,
         text: PlainText,
         out_buf: &'a mut [u8],
     ) -> Result<Token<'a>, RnsError> {
@@ -117,7 +121,7 @@ impl<R: CryptoRngCore> Fernet<R> {
         let mut out_len = 0;
 
         // Generate random IV
-        let iv = Aes128CbcEnc::generate_iv(&mut self.rng);
+        let iv = Aes128CbcEnc::generate_iv(self.rng);
         out_buf[..iv.len()].copy_from_slice(iv.as_slice());
 
         out_len += iv.len();
@@ -129,10 +133,12 @@ impl<R: CryptoRngCore> Fernet<R> {
 
         out_len += chiper_len;
 
-        let tag = <HmacSha256 as KeyInit>::new(&self.sign_key)
-            .chain_update(&out_buf[..out_len])
-            .finalize()
-            .into_bytes();
+        let mut hmac = <HmacSha256 as Mac>::new_from_slice(&self.sign_key)
+            .map_err(|_| RnsError::InvalidArgument)?;
+
+        hmac.update(&out_buf[..out_len]);
+
+        let tag = hmac.finalize().into_bytes();
 
         out_buf[out_len..out_len + tag.len()].copy_from_slice(tag.as_slice());
         out_len += tag.len();
@@ -142,7 +148,7 @@ impl<R: CryptoRngCore> Fernet<R> {
         })
     }
 
-    pub fn verify<'a>(&mut self, token: Token<'a>) -> Result<VerifiedToken<'a>, RnsError> {
+    pub fn verify<'a>(&self, token: Token<'a>) -> Result<VerifiedToken<'a>, RnsError> {
         let token_data = token.0;
 
         if token_data.len() <= FERNET_OVERHEAD_SIZE {
@@ -151,10 +157,12 @@ impl<R: CryptoRngCore> Fernet<R> {
 
         let expected_tag = &token_data[token_data.len() - HMAC_OUT_SIZE..];
 
-        let actual_tag = <HmacSha256 as KeyInit>::new(&self.sign_key)
-            .chain_update(&token_data[..token_data.len() - HMAC_OUT_SIZE])
-            .finalize()
-            .into_bytes();
+        let mut hmac = <HmacSha256 as Mac>::new_from_slice(&self.sign_key)
+            .map_err(|_| RnsError::InvalidArgument)?;
+
+        hmac.update(&token_data[..token_data.len() - HMAC_OUT_SIZE]);
+
+        let actual_tag = hmac.finalize().into_bytes();
 
         let valid = expected_tag
             .iter()
@@ -172,7 +180,7 @@ impl<R: CryptoRngCore> Fernet<R> {
     }
 
     pub fn decrypt<'a, 'b>(
-        &mut self,
+        &self,
         token: VerifiedToken<'a>,
         out_buf: &'b mut [u8],
     ) -> Result<PlainText<'b>, RnsError> {
