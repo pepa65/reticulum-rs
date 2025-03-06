@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey, PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 use hkdf::Hkdf;
 use rand_core::OsRng;
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 use x25519_dalek::StaticSecret;
 
 use crate::{
@@ -12,9 +12,10 @@ use crate::{
     destination::DestinationDesc,
     error::RnsError,
     hash::{AddressHash, Hash, ADDRESS_HASH_SIZE},
-    identity::{DerivedKey, EncryptIdentity, Identity, PrivateIdentity},
+    identity::{DecryptIdentity, DerivedKey, EncryptIdentity, Identity, PrivateIdentity},
     packet::{
         DestinationType, Header, IfacFlag, Packet, PacketContext, PacketDataBuffer, PacketType,
+        PACKET_MDU,
     },
 };
 
@@ -31,9 +32,28 @@ pub enum LinkStatus {
 
 pub type LinkId = AddressHash;
 
+pub type LinkPayload = [u8; PACKET_MDU];
+
 impl From<&Packet> for LinkId {
     fn from(packet: &Packet) -> Self {
-        packet.hash().into()
+        let data = packet.data.as_slice();
+        let data_diff = if data.len() > PUBLIC_KEY_LENGTH * 2 {
+            data.len() - PUBLIC_KEY_LENGTH * 2
+        } else {
+            0
+        };
+
+        let hashable_data = &data[..data.len() - data_diff];
+
+        AddressHash::new_from_hash(&Hash::new(
+            Hash::generator()
+                .chain_update(&[packet.header.to_meta() & 0b00001111])
+                .chain_update(packet.destination.as_slice())
+                .chain_update(&[packet.context as u8])
+                .chain_update(hashable_data)
+                .finalize()
+                .into(),
+        ))
     }
 }
 
@@ -81,8 +101,11 @@ impl Link {
             &packet.data.as_slice()[PUBLIC_KEY_LENGTH..PUBLIC_KEY_LENGTH * 2],
         );
 
+        let link_id = LinkId::from(packet);
+        log::trace!("link: create from request {}", link_id);
+
         let mut link = Self {
-            id: LinkId::from(packet),
+            id: link_id,
             destination,
             priv_identity: PrivateIdentity::new(StaticSecret::random_from_rng(OsRng), signing_key),
             peer_identity,
@@ -90,6 +113,7 @@ impl Link {
             status: LinkStatus::Pending,
             request_time: Instant::now(),
             rtt: Duration::from_secs(0),
+            decode_buffer: PacketDataBuffer::new(),
         };
 
         link.handshake(peer_identity);
@@ -150,12 +174,27 @@ impl Link {
         packet
     }
 
+    fn handle_data_packet(&mut self, packet: &Packet) -> LinkHandleResult {
+        match packet.context {
+            PacketContext::None => {
+                // let mut payload = LinkPayload { 0: [0u8] };
+                // if let Ok(plain_text) = self.decrypt(packet.data.as_slice()) {
+                //     println!("{:?}", String::from_utf8_lossy(plain_text));
+                // }
+            }
+            _ => {}
+        }
+
+        LinkHandleResult::None
+    }
+
     pub fn handle_packet(&mut self, packet: &Packet) -> LinkHandleResult {
         if packet.destination != self.id {
             return LinkHandleResult::None;
         }
 
         match packet.header.packet_type {
+            PacketType::Data => return self.handle_data_packet(packet),
             PacketType::Proof => {
                 if self.status == LinkStatus::Pending
                     && packet.context == PacketContext::LinkRequestProof
@@ -186,6 +225,11 @@ impl Link {
             .encrypt(OsRng, text, &self.derived_key, out_buf)
     }
 
+    pub fn decrypt<'a>(&self, text: &[u8], out_buf: &'a mut [u8]) -> Result<&'a [u8], RnsError> {
+        self.priv_identity
+            .decrypt(OsRng, text, &self.derived_key, out_buf)
+    }
+
     pub fn create_rtt(&self) -> Packet {
         let rtt = self.rtt.as_secs_f32();
         let mut buf = Vec::new();
@@ -205,7 +249,7 @@ impl Link {
 
         packet_data.resize(token_len);
 
-        log::trace!("link: {} create rtt packet '{}s'", self.id, rtt);
+        log::trace!("link: {} create rtt packet = {} sec", self.id, rtt);
 
         Packet {
             header: Header {

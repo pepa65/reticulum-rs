@@ -202,7 +202,7 @@ fn handle_data<'a>(packet: &Packet, handler: &mut MutexGuard<'a, TransportHandle
     if packet.header.destination_type == DestinationType::Link {
         if let Some(link) = handler.in_links.get(&packet.destination).cloned() {
             let mut link = link.lock().unwrap();
-            if packet.context == PacketContext::LinkRTT {}
+            let _ = link.handle_packet(packet);
         }
     }
 
@@ -229,7 +229,10 @@ fn handle_link_request<'a>(packet: &Packet, handler: &mut MutexGuard<'a, Transpo
         let mut destination = destination.lock().unwrap();
         match destination.handle_packet(packet) {
             DestinationHandleStatus::LinkProof(link, packet) => {
+                log::trace!("tp: send proof to {}", packet.destination);
+
                 handler.out_packet_tx.send(packet).unwrap();
+
                 handler
                     .in_links
                     .insert(*link.id(), Arc::new(Mutex::new(link)));

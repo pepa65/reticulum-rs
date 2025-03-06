@@ -263,15 +263,15 @@ impl Packet {
 
 impl fmt::Display for Packet {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "/{}", self.header)?;
-
-        write!(f, " 0x{}", self.destination)?;
+        write!(f, "[{}", self.header)?;
 
         if let Some(transport) = self.transport {
-            write!(f, " 0x{}", transport)?;
+            write!(f, " {}", transport)?;
         }
 
-        write!(f, " 0x[{}]/", self.data.len())?;
+        write!(f, " {}", self.destination)?;
+
+        write!(f, " 0x[{}]]", self.data.len())?;
 
         Ok(())
     }

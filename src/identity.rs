@@ -308,7 +308,7 @@ impl DecryptIdentity for PrivateIdentity {
             rng,
         );
 
-        let token = Token::from(&data[PUBLIC_KEY_LENGTH..]);
+        let token = Token::from(&data[..]);
 
         let token = fernet.verify(token)?;
 
