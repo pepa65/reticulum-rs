@@ -1,4 +1,7 @@
-use std::time::{Duration, Instant};
+use std::{
+    cmp::min,
+    time::{Duration, Instant},
+};
 
 use ed25519_dalek::{Signature, SigningKey, PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 use rand_core::OsRng;
@@ -30,7 +33,47 @@ pub enum LinkStatus {
 
 pub type LinkId = AddressHash;
 
-pub type LinkPayload = [u8; PACKET_MDU];
+#[derive(Clone)]
+pub struct LinkPayload {
+    buffer: [u8; PACKET_MDU],
+    len: usize,
+}
+
+impl LinkPayload {
+    pub fn new() -> Self {
+        Self {
+            buffer: [0u8; PACKET_MDU],
+            len: 0,
+        }
+    }
+
+    pub fn new_from_slice(data: &[u8]) -> Self {
+        let mut buffer = [0u8; PACKET_MDU];
+
+        let len = min(data.len(), buffer.len());
+
+        buffer[..len].copy_from_slice(&data[..len]);
+
+        Self { buffer, len }
+    }
+
+    pub fn new_from_vec(data: &Vec<u8>) -> Self {
+        let mut buffer = [0u8; PACKET_MDU];
+
+        for i in 0..data.len() {
+            buffer[i] = data[i];
+        }
+
+        Self {
+            buffer,
+            len: data.len(),
+        }
+    }
+
+    pub fn as_slice(&self) -> &[u8] {
+        &self.buffer[..self.len]
+    }
+}
 
 impl From<&Packet> for LinkId {
     fn from(packet: &Packet) -> Self {
@@ -60,6 +103,13 @@ pub enum LinkHandleResult {
     Activated,
 }
 
+#[derive(Clone)]
+pub enum LinkEvent {
+    Activated,
+    Data(LinkPayload),
+    Closed,
+}
+
 pub struct Link {
     id: LinkId,
     destination: DestinationDesc,
@@ -69,6 +119,7 @@ pub struct Link {
     status: LinkStatus,
     request_time: Instant,
     rtt: Duration,
+    event_tx: tokio::sync::broadcast::Sender<LinkEvent>,
 }
 
 impl Link {
@@ -82,6 +133,7 @@ impl Link {
             status: LinkStatus::Pending,
             request_time: Instant::now(),
             rtt: Duration::from_secs(0),
+            event_tx: tokio::sync::broadcast::channel(8).0,
         }
     }
 
@@ -111,11 +163,16 @@ impl Link {
             status: LinkStatus::Pending,
             request_time: Instant::now(),
             rtt: Duration::from_secs(0),
+            event_tx: tokio::sync::broadcast::channel(8).0,
         };
 
         link.handshake(peer_identity);
 
         Ok(link)
+    }
+
+    pub fn event(&mut self) -> tokio::sync::broadcast::Receiver<LinkEvent> {
+        self.event_tx.subscribe()
     }
 
     pub fn request(&mut self) -> Packet {
@@ -174,10 +231,12 @@ impl Link {
     fn handle_data_packet(&mut self, packet: &Packet) -> LinkHandleResult {
         match packet.context {
             PacketContext::None => {
-                // let mut payload = LinkPayload { 0: [0u8] };
-                // if let Ok(plain_text) = self.decrypt(packet.data.as_slice()) {
-                //     println!("{:?}", String::from_utf8_lossy(plain_text));
-                // }
+                let mut buffer = [0u8; PACKET_MDU];
+                if let Ok(plain_text) = self.decrypt(packet.data.as_slice(), &mut buffer[..]) {
+                    let _ = self
+                        .event_tx
+                        .send(LinkEvent::Data(LinkPayload::new_from_slice(plain_text)));
+                }
             }
             _ => {}
         }
@@ -205,6 +264,8 @@ impl Link {
                         self.status = LinkStatus::Active;
                         self.rtt = self.request_time.elapsed();
 
+                        let _ = self.event_tx.send(LinkEvent::Activated);
+
                         return LinkHandleResult::Activated;
                     } else {
                         log::warn!("link: proof not valid");
@@ -215,6 +276,33 @@ impl Link {
         }
 
         return LinkHandleResult::None;
+    }
+
+    pub fn data_packet(&self, data: &[u8]) -> Result<Packet, RnsError> {
+        if self.status != LinkStatus::Active {
+            return Err(RnsError::InvalidArgument);
+        }
+        let mut packet_data = PacketDataBuffer::new();
+
+        let cipher_text_len = {
+            let cipher_text = self.encrypt(data, packet_data.accuire_buf_max())?;
+            cipher_text.len()
+        };
+
+        packet_data.resize(cipher_text_len);
+
+        Ok(Packet {
+            header: Header {
+                destination_type: DestinationType::Link,
+                packet_type: PacketType::Data,
+                ..Default::default()
+            },
+            ifac: None,
+            destination: self.id,
+            transport: None,
+            context: PacketContext::None,
+            data: packet_data,
+        })
     }
 
     pub fn encrypt<'a>(&self, text: &[u8], out_buf: &'a mut [u8]) -> Result<&'a [u8], RnsError> {

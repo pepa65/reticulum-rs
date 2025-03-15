@@ -1,3 +1,4 @@
+use alloc::fmt::Write;
 use hkdf::Hkdf;
 use rand_core::CryptoRngCore;
 
@@ -77,6 +78,43 @@ impl Identity {
         };
 
         Self::new(public_key, verifying_key)
+    }
+
+    pub fn new_from_hex_string(hex_string: &str) -> Result<Self, RnsError> {
+        if hex_string.len() < PUBLIC_KEY_LENGTH * 2 * 2 {
+            return Err(RnsError::IncorrectHash);
+        }
+
+        let mut public_key_bytes = [0u8; PUBLIC_KEY_LENGTH];
+        let mut verifying_key_bytes = [0u8; PUBLIC_KEY_LENGTH];
+
+        for i in 0..PUBLIC_KEY_LENGTH {
+            public_key_bytes[i] = u8::from_str_radix(&hex_string[i * 2..(i * 2) + 2], 16).unwrap();
+            verifying_key_bytes[i] = u8::from_str_radix(
+                &hex_string[PUBLIC_KEY_LENGTH * 2 + (i * 2)..PUBLIC_KEY_LENGTH * 2 + (i * 2) + 2],
+                16,
+            )
+            .unwrap();
+        }
+
+        Ok(Self::new_from_slices(
+            &public_key_bytes[..],
+            &verifying_key_bytes[..],
+        ))
+    }
+
+    pub fn to_hex_string(&self) -> String {
+        let mut hex_string = String::with_capacity((PUBLIC_KEY_LENGTH * 2) * 2);
+
+        for byte in self.public_key.as_bytes() {
+            write!(&mut hex_string, "{:02x}", byte).unwrap();
+        }
+
+        for byte in self.verifying_key.as_bytes() {
+            write!(&mut hex_string, "{:02x}", byte).unwrap();
+        }
+
+        hex_string
     }
 
     pub fn public_key_bytes(&self) -> &[u8; PUBLIC_KEY_LENGTH] {
@@ -223,6 +261,29 @@ impl PrivateIdentity {
         Self::new(private_key, sign_key)
     }
 
+    pub fn new_from_hex_string(hex_string: &str) -> Result<Self, RnsError> {
+        if hex_string.len() < PUBLIC_KEY_LENGTH * 2 * 2 {
+            return Err(RnsError::IncorrectHash);
+        }
+
+        let mut private_key_bytes = [0u8; PUBLIC_KEY_LENGTH];
+        let mut sign_key_bytes = [0u8; PUBLIC_KEY_LENGTH];
+
+        for i in 0..PUBLIC_KEY_LENGTH {
+            private_key_bytes[i] = u8::from_str_radix(&hex_string[i * 2..(i * 2) + 2], 16).unwrap();
+            sign_key_bytes[i] = u8::from_str_radix(
+                &hex_string[PUBLIC_KEY_LENGTH * 2 + (i * 2)..PUBLIC_KEY_LENGTH * 2 + (i * 2) + 2],
+                16,
+            )
+            .unwrap();
+        }
+
+        Ok(Self::new(
+            StaticSecret::from(private_key_bytes),
+            SigningKey::from_bytes(&sign_key_bytes),
+        ))
+    }
+
     pub fn sign_key(&self) -> &SigningKey {
         &self.sign_key
     }
@@ -237,6 +298,20 @@ impl PrivateIdentity {
 
     pub fn address_hash(&self) -> &AddressHash {
         &self.identity.address_hash
+    }
+
+    pub fn to_hex_string(&self) -> String {
+        let mut hex_string = String::with_capacity((PUBLIC_KEY_LENGTH * 2) * 2);
+
+        for byte in self.private_key.as_bytes() {
+            write!(&mut hex_string, "{:02x}", byte).unwrap();
+        }
+
+        for byte in self.sign_key.as_bytes() {
+            write!(&mut hex_string, "{:02x}", byte).unwrap();
+        }
+
+        hex_string
     }
 
     pub fn verify(&self, data: &[u8], signature: &Signature) -> Result<(), RnsError> {
@@ -362,5 +437,31 @@ impl DerivedKey {
 
     pub fn as_slice(&self) -> &[u8] {
         &self.key[..]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use rand_core::OsRng;
+
+    use super::PrivateIdentity;
+
+    #[test]
+    fn private_identity_hex_string() {
+        let original_id = PrivateIdentity::new_from_rand(OsRng);
+        let original_hex = original_id.to_hex_string();
+
+        let actual_id =
+            PrivateIdentity::new_from_hex_string(&original_hex).expect("valid identity");
+
+        assert_eq!(
+            actual_id.private_key.as_bytes(),
+            original_id.private_key.as_bytes()
+        );
+
+        assert_eq!(
+            actual_id.sign_key.as_bytes(),
+            original_id.sign_key.as_bytes()
+        );
     }
 }

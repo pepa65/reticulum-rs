@@ -1,3 +1,4 @@
+use alloc::fmt::Write;
 use core::cmp;
 use core::fmt;
 
@@ -5,6 +6,8 @@ use crypto_common::typenum::Unsigned;
 use crypto_common::OutputSizeUser;
 use rand_core::CryptoRngCore;
 use sha2::{Digest, Sha256};
+
+use crate::error::RnsError;
 
 pub const HASH_SIZE: usize = <<Sha256 as OutputSizeUser>::OutputSize as Unsigned>::USIZE;
 pub const ADDRESS_HASH_SIZE: usize = 16;
@@ -90,6 +93,20 @@ impl AddressHash {
         Self::new_from_hash(&Hash::new_from_rand(rng))
     }
 
+    pub fn new_from_hex_string(hex_string: &str) -> Result<Self, RnsError> {
+        if hex_string.len() < ADDRESS_HASH_SIZE * 2 {
+            return Err(RnsError::IncorrectHash);
+        }
+
+        let mut bytes = [0u8; ADDRESS_HASH_SIZE];
+
+        for i in 0..ADDRESS_HASH_SIZE {
+            bytes[i] = u8::from_str_radix(&hex_string[i * 2..(i * 2) + 2], 16).unwrap();
+        }
+
+        Ok(Self { 0: bytes })
+    }
+
     pub const fn new_empty() -> Self {
         Self {
             0: [0u8; ADDRESS_HASH_SIZE],
@@ -106,6 +123,16 @@ impl AddressHash {
 
     pub const fn len(&self) -> usize {
         self.0.len()
+    }
+
+    pub fn to_hex_string(&self) -> String {
+        let mut hex_string = String::with_capacity(ADDRESS_HASH_SIZE * 2);
+
+        for byte in self.0 {
+            write!(&mut hex_string, "{:02x}", byte).unwrap();
+        }
+
+        hex_string
     }
 }
 
@@ -134,5 +161,28 @@ impl fmt::Display for Hash {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use rand_core::OsRng;
+
+    use crate::hash::AddressHash;
+
+    #[test]
+    fn address_hex_string() {
+        let original_address_hash = AddressHash::new_from_rand(OsRng);
+
+        let address_hash_hex = original_address_hash.to_hex_string();
+
+        let actual_address_hash =
+            AddressHash::new_from_hex_string(&address_hash_hex).expect("valid hash");
+
+        assert_eq!(
+            actual_address_hash.as_slice(),
+            original_address_hash.as_slice()
+        );
     }
 }
