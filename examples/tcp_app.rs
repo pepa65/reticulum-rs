@@ -1,7 +1,7 @@
 use rand_core::OsRng;
 use reticulum::destination::{DestinationAnnounce, DestinationName, SingleInputDestination};
 use reticulum::identity::PrivateIdentity;
-use reticulum::iface::tcp::{TcpClient, TcpClientConfig};
+use reticulum::iface::tcp::{TcpClientConfig, TcpClientInterface};
 use reticulum::transport::Transport;
 
 #[tokio::main]
@@ -12,14 +12,12 @@ async fn main() {
 
     log::info!("start tcp app");
 
-    let _tcp_client = TcpClient::new(
+    let _tcp_client = TcpClientInterface::start(
         TcpClientConfig {
             addr: "127.0.0.1:4242".into(),
         },
         transport.packet_channel(),
-    )
-    .await
-    .expect("tcp client");
+    );
 
     let id = PrivateIdentity::new_from_rand(OsRng);
 

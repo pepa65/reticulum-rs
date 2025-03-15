@@ -1,23 +1,21 @@
 use std::time::{Duration, Instant};
 
-use ed25519_dalek::{Signature, SigningKey, VerifyingKey, PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
-use hkdf::Hkdf;
+use ed25519_dalek::{Signature, SigningKey, PUBLIC_KEY_LENGTH, SIGNATURE_LENGTH};
 use rand_core::OsRng;
-use sha2::{Digest, Sha256};
+use sha2::Digest;
 use x25519_dalek::StaticSecret;
 
 use crate::{
     buffer::OutputBuffer,
-    crypt::fernet::{Fernet, PlainText, Token},
-    destination::DestinationDesc,
     error::RnsError,
     hash::{AddressHash, Hash, ADDRESS_HASH_SIZE},
     identity::{DecryptIdentity, DerivedKey, EncryptIdentity, Identity, PrivateIdentity},
     packet::{
-        DestinationType, Header, IfacFlag, Packet, PacketContext, PacketDataBuffer, PacketType,
-        PACKET_MDU,
+        DestinationType, Header, Packet, PacketContext, PacketDataBuffer, PacketType, PACKET_MDU,
     },
 };
+
+use super::DestinationDesc;
 
 const LINK_MTU_SIZE: usize = 3;
 
@@ -113,7 +111,6 @@ impl Link {
             status: LinkStatus::Pending,
             request_time: Instant::now(),
             rtt: Duration::from_secs(0),
-            decode_buffer: PacketDataBuffer::new(),
         };
 
         link.handshake(peer_identity);

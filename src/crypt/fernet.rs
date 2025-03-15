@@ -7,7 +7,7 @@ use aes::cipher::Key;
 use aes::cipher::Unsigned;
 use cbc::cipher::BlockEncryptMut;
 use cbc::cipher::KeyIvInit;
-use crypto_common::{IvSizeUser, KeyInit, KeySizeUser, OutputSizeUser};
+use crypto_common::{IvSizeUser, KeySizeUser, OutputSizeUser};
 use hmac::{Hmac, Mac};
 use rand_core::CryptoRngCore;
 use sha2::Sha256;
@@ -18,7 +18,6 @@ type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
 type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
 type HmacSha256 = Hmac<Sha256>;
 
-const HMAC_KEY_SIZE: usize = <<HmacSha256 as KeySizeUser>::KeySize as Unsigned>::USIZE;
 const HMAC_OUT_SIZE: usize = <<HmacSha256 as OutputSizeUser>::OutputSize as Unsigned>::USIZE;
 const AES_KEY_SIZE: usize = <<aes::Aes128 as KeySizeUser>::KeySize as Unsigned>::USIZE;
 const IV_KEY_SIZE: usize = <<Aes128CbcEnc as IvSizeUser>::IvSize as Unsigned>::USIZE;

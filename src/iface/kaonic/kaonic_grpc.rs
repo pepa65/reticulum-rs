@@ -2,140 +2,186 @@ pub mod proto {
     tonic::include_proto!("kaonic");
 }
 
+use std::time::Duration;
+
 use proto::device_client::DeviceClient;
 use proto::radio_client::RadioClient;
-
-use tokio::sync::mpsc;
-
+use proto::RadioFrame;
 use tokio_stream::StreamExt;
 use tonic::transport::Channel;
 
 use crate::buffer::{InputBuffer, OutputBuffer};
 use crate::error::RnsError;
+use crate::iface::{Interface, PacketChannel};
 use crate::packet::Packet;
 use crate::serde::Serialize;
 
-use crate::iface::kaonic::RadioConfig;
-use crate::iface::kaonic::RadioModule;
+use alloc::string::String;
 
-const TX_BUFFER_SIZE: usize = 4096;
+use super::RadioModule;
+
+#[derive(Clone)]
+pub struct KaonicGrpcConfig {
+    pub addr: String,
+    pub module: RadioModule,
+}
 
 pub struct KaonicGrpc {
-    radio_client: RadioClient<Channel>,
-    device_client: DeviceClient<Channel>,
-    tx_buffer: [u8; TX_BUFFER_SIZE],
-    rx_task: tokio::task::JoinHandle<Result<(), RnsError>>,
-    packet_rx: tokio::sync::mpsc::Receiver<Packet>,
-    module: RadioModule,
+    config: KaonicGrpcConfig,
 }
 
-fn convert_frame_to_packet(frame: &proto::RadioFrame) -> Result<Packet, RnsError> {
-    let mut buffer = [0u8; crate::iface::kaonic::RADIO_FRAME_MAX_SIZE];
-    let mut convert_buffer = OutputBuffer::new(&mut buffer);
+pub type KaonicGrpcInterface = Interface<KaonicGrpc>;
 
-    let mut buffer = InputBuffer::new(convert_buffer.as_slice());
-    Packet::deserialize(&mut buffer)
-}
+impl KaonicGrpcInterface {
+    pub fn start(config: KaonicGrpcConfig, channel: PacketChannel) -> Self {
+        log::debug!("kaonic_grpc: start new iface <{}>", config.addr);
 
-impl KaonicGrpc {
-    pub async fn new(address: &str, module: RadioModule) -> Result<Self, RnsError> {
-        let channel = Channel::from_shared(address.to_string())
-            .unwrap()
-            .connect_lazy();
+        let handler = KaonicGrpc { config };
 
-        let radio_client = RadioClient::new(channel.clone());
+        Interface::<KaonicGrpc>::new(
+            handler,
+            channel,
+            |mut channel, handler, cancel| async move {
+                let config = { handler.lock().unwrap().config.clone() };
+                loop {
+                    if cancel.is_cancelled() {
+                        break;
+                    }
 
-        let (mut packet_tx, packet_rx) = mpsc::channel(32);
+                    let grpc_channel = Channel::from_shared(config.addr.to_string())
+                        .unwrap()
+                        .connect_timeout(Duration::from_secs(30))
+                        .connect()
+                        .await;
 
-        let mut rx_radio_client = radio_client.clone();
-        let rx_task = tokio::spawn(async move {
-            let mut stream = rx_radio_client
-                .receive_stream(proto::ReceiveRequest {
-                    module: module as u32,
-                    timeout: 0, // unused
-                })
-                .await
-                .map_err(|_| RnsError::ConnectionError)?
-                .into_inner();
+                    if let Err(err) = grpc_channel {
+                        log::warn!(
+                            "kaonic_grpc: couldn't connect to <{}> = '{}'",
+                            config.addr,
+                            err
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        continue;
+                    }
 
-            while let Some(item) = stream.next().await {
-                if let Some(response) = item.ok() {
-                    if let Some(frame) = response.frame {
-                        let packet = convert_frame_to_packet(&frame);
-                        if let Ok(packet) = packet {
-                            let _ = packet_tx.send(packet).await;
+                    let grpc_channel = grpc_channel.unwrap();
+
+                    let mut radio_client = RadioClient::new(grpc_channel.clone());
+                    let mut _device_client = DeviceClient::new(grpc_channel.clone());
+
+                    let mut recv_stream = radio_client
+                        .receive_stream(proto::ReceiveRequest {
+                            module: config.module as u32,
+                            timeout: 0,
+                        })
+                        .await
+                        .unwrap()
+                        .into_inner();
+
+                    log::info!("kaonic_grpc: connected to <{}>", config.addr);
+
+                    loop {
+                        const BUFFER_SIZE: usize = std::mem::size_of::<Packet>() * 3;
+
+                        let mut tx_buffer = [0u8; BUFFER_SIZE];
+                        let mut rx_buffer = [0u8; BUFFER_SIZE];
+
+                        tokio::select! {
+                            _ = cancel.cancelled() => {
+                                    break;
+                            }
+                            Some(result) = recv_stream.next() => {
+                                if let Ok(response) = result {
+                                    if let Some(frame) = response.frame {
+                                        if frame.length > 0 {
+                                            if let Ok(buf) = decode_frame_to_buffer(&frame, &mut rx_buffer[..]) {
+                                                if let Ok(packet) = Packet::deserialize(&mut InputBuffer::new(buf)) {
+                                                        let _ = channel.send_rx(packet).await;
+                                                } else {
+                                                    log::warn!("kaonic_grpc: couldn't decode packet");
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(packet) = channel.wait_for_tx() => {
+                                let mut output = OutputBuffer::new(&mut tx_buffer);
+                                if let Ok(_) = packet.serialize(&mut output) {
+
+                                    let frame = encode_buffer_to_frame(output.as_mut_slice());
+
+                                    let result = radio_client.transmit(proto::TransmitRequest{
+                                        module: config.module as u32,
+                                        frame: Some(frame),
+                                    }).await;
+
+                                    if let Err(err) = result {
+                                        log::warn!("kaonic_grpc: tx err = '{}'", err);
+                                        if err.code() == tonic::Code::Unknown || err.code() == tonic::Code::Unavailable {
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
+
+                    log::info!("kaonic_grpc: disconnected from <{}>", config.addr);
                 }
+            },
+        )
+    }
+}
+
+fn encode_buffer_to_frame(buffer: &mut [u8]) -> RadioFrame {
+    // Convert the packet bytes to a list of words
+    // TODO: Optimize dynamic allocation
+    let words = buffer
+        .chunks(4)
+        .map(|chunk| {
+            let mut work = 0u32;
+            let chunk = chunk.iter().as_slice();
+
+            for i in 0..chunk.len() {
+                work |= (chunk[i] as u32) << (i * 8);
             }
 
-            Ok(())
-        });
-
-        Ok(Self {
-            radio_client,
-            device_client: DeviceClient::new(channel.clone()),
-            tx_buffer: [0u8; TX_BUFFER_SIZE],
-            packet_rx,
-            rx_task,
-            module,
+            work
         })
+        .collect::<Vec<_>>();
+
+    proto::RadioFrame {
+        data: words,
+        length: buffer.len() as u32,
+    }
+}
+
+fn decode_frame_to_buffer<'a>(
+    frame: &RadioFrame,
+    buffer: &'a mut [u8],
+) -> Result<&'a [u8], RnsError> {
+    if buffer.len() < (frame.length as usize) {
+        return Err(RnsError::OutOfMemory);
     }
 
-    pub async fn configure(&mut self, config: RadioConfig) -> Result<(), RnsError> {
-        let _ = self
-            .radio_client
-            .configure(proto::ConfigurationRequest {
-                module: self.module as u32,
-                freq: config.freq,
-                channel: config.channel,
-                channel_spacing: config.channel_spacing,
-            })
-            .await
-            .map_err(|_| RnsError::ConnectionError)?;
-        Ok(())
+    let length = frame.length as usize;
+    let mut index = 0usize;
+    for word in &frame.data {
+        for i in 0..4 {
+            buffer[index] = ((word >> i * 8) & 0xFF) as u8;
+
+            index += 1;
+
+            if index >= length {
+                break;
+            }
+        }
+
+        if index >= length {
+            break;
+        }
     }
 
-    /// Transmit a packet over the radio
-    pub async fn transmit(&mut self, packet: &Packet) -> Result<(), RnsError> {
-        let mut output_buffer = OutputBuffer::new(&mut self.tx_buffer);
-
-        packet.serialize(&mut output_buffer)?;
-
-        let bytes = output_buffer.as_mut_slice();
-
-        // Convert the packet bytes to a list of words
-        // NOTE: Dynamic allocation
-        let words = bytes
-            .chunks(4)
-            .map(|chunk| {
-                let mut work = 0u32;
-                let chunk = chunk.iter().as_slice();
-
-                for i in 0..chunk.len() {
-                    work |= (chunk[i] as u32) << (i * 8);
-                }
-
-                work
-            })
-            .collect::<Vec<_>>();
-
-        let frame = proto::RadioFrame {
-            data: words,
-            length: bytes.len() as u32,
-        };
-
-        let request = proto::TransmitRequest {
-            module: self.module as u32,
-            frame: Some(frame),
-        };
-
-        let _ = self
-            .radio_client
-            .transmit(request)
-            .await
-            .map_err(|_| RnsError::ConnectionError)?;
-
-        Ok(())
-    }
+    Ok(&buffer[..length])
 }

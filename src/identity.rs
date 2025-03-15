@@ -2,7 +2,7 @@ use hkdf::Hkdf;
 use rand_core::CryptoRngCore;
 
 use ed25519_dalek::{ed25519::signature::Signer, Signature, SigningKey, VerifyingKey};
-use sha2::{Digest, Sha256, Sha512};
+use sha2::{Digest, Sha256};
 use x25519_dalek::{EphemeralSecret, PublicKey, SharedSecret, StaticSecret};
 
 use crate::{
@@ -190,6 +190,7 @@ impl DecryptIdentity for EmptyIdentity {
     }
 }
 
+#[derive(Clone)]
 pub struct PrivateIdentity {
     identity: Identity,
     private_key: StaticSecret,

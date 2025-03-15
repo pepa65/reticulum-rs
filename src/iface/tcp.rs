@@ -1,7 +1,5 @@
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
-use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
 
 use crate::buffer::{InputBuffer, OutputBuffer};
 use crate::error::RnsError;
@@ -13,88 +11,63 @@ use tokio::io::AsyncReadExt;
 use alloc::string::String;
 
 use super::hdlc::Hdlc;
-use super::PacketChannel;
-
-struct TcpClientHandler {}
+use super::{Interface, PacketChannel};
 
 #[derive(Clone)]
 pub struct TcpClientConfig {
     pub addr: String,
 }
 
-enum ClientCommand {
-    Send(Packet),
-    Close,
-}
-
 pub struct TcpClient {
-    client_task: tokio::task::JoinHandle<()>,
-    cmd_tx: tokio::sync::mpsc::Sender<ClientCommand>,
-    cancel_token: CancellationToken,
+    config: TcpClientConfig,
 }
 
-impl TcpClient {
-    pub async fn new(
-        config: TcpClientConfig,
-        packet_channel: PacketChannel,
-    ) -> Result<Self, RnsError> {
-        let cancel_token = CancellationToken::new();
+pub type TcpClientInterface = Interface<TcpClient>;
 
-        let (cmd_tx, mut cmd_rx) = mpsc::channel::<ClientCommand>(4);
+impl TcpClientInterface {
+    pub fn start(config: TcpClientConfig, channel: PacketChannel) -> Self {
+        log::debug!("tcp_client: start new iface <{}>", config.addr);
 
-        let mut packet_channel = packet_channel;
+        let handler = TcpClient { config };
 
-        // Spawn task with reconnection mechanism
-        let client_task = {
-            let task_cancel_token = cancel_token.clone();
-
-            let mut handler = TcpClientHandler {};
-            tokio::spawn(async move {
+        Interface::<TcpClient>::new(
+            handler,
+            channel,
+            |mut channel, handler, cancel| async move {
+                let config = { handler.lock().unwrap().config.clone() };
                 loop {
-                    tokio::select! {
-                        _ = task_cancel_token.cancelled() => {
-                                break;
-                        }
-                        _ = handler.handle(&config.addr, &mut cmd_rx, &mut packet_channel) => {
-                            log::warn!("tcp_client: retry connection");
-                            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
-                        }
+                    if cancel.is_cancelled() {
+                        break;
                     }
-                }
-            })
-        };
 
-        Ok(Self {
-            client_task,
-            cmd_tx,
-            cancel_token,
-        })
-    }
-}
+                    let stream = TcpStream::connect(config.addr.clone())
+                        .await
+                        .map_err(|_| RnsError::ConnectionError);
 
-impl TcpClientHandler {
-    async fn handle(
-        &mut self,
-        addr: &str,
-        cmd_rx: &mut tokio::sync::mpsc::Receiver<ClientCommand>,
-        packet_channel: &mut PacketChannel,
-    ) -> Result<(), RnsError> {
-        let mut stream = TcpStream::connect(addr)
-            .await
-            .map_err(|_| RnsError::ConnectionError)?;
+                    if let Err(_) = stream {
+                        log::info!("tcp_client: couldn't connect to <{}>", config.addr);
+                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                        continue;
+                    }
 
-        log::info!("tcp_client connected to <{}>", addr);
+                    let mut stream = stream.unwrap();
 
-        let mut hdlc_tx_buffer = [0u8; 2048];
-        let mut hdlc_rx_buffer = [0u8; 2048];
+                    log::info!("tcp_client connected to <{}>", config.addr);
 
-        let mut tx_buffer = [0u8; 2048];
-        let mut rx_buffer = [0u8; 2048];
+                    loop {
+                        const BUFFER_SIZE: usize = std::mem::size_of::<Packet>() * 3;
 
-        loop {
-            tokio::select! {
-                // Read stream
-                result = stream.read(&mut rx_buffer) => {
+                        let mut hdlc_tx_buffer = [0u8; BUFFER_SIZE];
+                        let mut hdlc_rx_buffer = [0u8; BUFFER_SIZE];
+
+                        let mut tx_buffer = [0u8; BUFFER_SIZE];
+                        let mut rx_buffer = [0u8; BUFFER_SIZE];
+
+                        tokio::select! {
+                            _ = cancel.cancelled() => {
+                                    break;
+                            }
+                            result = stream.read(&mut rx_buffer) => {
                                     match result {
                                         Ok(0) => {
                                             log::warn!("tcp_client: connection closed");
@@ -104,13 +77,12 @@ impl TcpClientHandler {
                                             let mut output = OutputBuffer::new(&mut hdlc_rx_buffer[..]);
                                             if let Ok(_) = Hdlc::decode(&rx_buffer[..n], &mut output) {
                                                 if let Ok(packet) = Packet::deserialize(&mut InputBuffer::new(output.as_slice())) {
-                                                    // log::trace!("tcp_client: << rx /{}/", packet.destination);
-                                                    let _ = packet_channel.in_tx.send(packet);
+                                                    let _ = channel.send_rx(packet).await;
                                                 } else {
-                                                    log::warn!("tcp_client: couldn't decode hdlc frame");
+                                                    log::warn!("tcp_client: couldn't decode packet");
                                                 }
                                             } else {
-                                                log::warn!("tcp_client: couldn't decode packet");
+                                                log::warn!("tcp_client: couldn't decode hdlc frame");
                                             }
                                         }
                                         Err(e) => {
@@ -119,36 +91,24 @@ impl TcpClientHandler {
                                         }
                                     }
                                 },
+                            Ok(packet) = channel.wait_for_tx() => {
+                                let mut output = OutputBuffer::new(&mut tx_buffer);
+                                if let Ok(_) = packet.serialize(&mut output) {
 
-                Ok(packet) = packet_channel.out_rx.recv() => {
-                    let mut output = OutputBuffer::new(&mut tx_buffer);
-                    // log::trace!("tcp_client: >> tx {}", packet.destination);
-                    if let Ok(_) = packet.serialize(&mut output) {
+                                    let mut hdlc_output = OutputBuffer::new(&mut hdlc_tx_buffer[..]);
 
-                        let mut hdlc_output = OutputBuffer::new(&mut hdlc_tx_buffer[..]);
-
-                        if let Ok(_) = Hdlc::encode(output.as_slice(), &mut hdlc_output) {
-                            let _ = stream.write_all(hdlc_output.as_slice()).await;
-                            let _ = stream.flush().await;
+                                    if let Ok(_) = Hdlc::encode(output.as_slice(), &mut hdlc_output) {
+                                        let _ = stream.write_all(hdlc_output.as_slice()).await;
+                                        let _ = stream.flush().await;
+                                    }
+                                }
+                            }
                         }
                     }
+
+                    log::info!("tcp_client: disconnected from <{}>", config.addr);
                 }
-
-                // Handle commands
-                Some(cmd) = cmd_rx.recv() => {
-                    match cmd {
-                        ClientCommand::Send(_) => {
-                        },
-                        ClientCommand::Close => {
-                            break;
-                        },
-                    }
-                }
-            };
-        }
-
-        log::debug!("tcp_client handler closed");
-
-        Ok(())
+            },
+        )
     }
 }

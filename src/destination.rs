@@ -1,24 +1,21 @@
+pub mod link;
+
 use ed25519_dalek::{Signature, VerifyingKey, SIGNATURE_LENGTH};
 use rand_core::CryptoRngCore;
 use x25519_dalek::PublicKey;
 
+use core::{fmt, marker::PhantomData};
+
 use crate::{
     error::RnsError,
     hash::{AddressHash, Hash},
-    identity::{
-        DecryptIdentity, EmptyIdentity, EncryptIdentity, HashIdentity, Identity, PrivateIdentity,
-        PUBLIC_KEY_LENGTH,
-    },
-    link,
+    identity::{EmptyIdentity, HashIdentity, Identity, PrivateIdentity, PUBLIC_KEY_LENGTH},
     packet::{
         self, DestinationType, Header, HeaderType, IfacFlag, Packet, PacketContext,
         PacketDataBuffer, PacketType, PropagationType,
     },
 };
-
 use sha2::Digest;
-
-use core::{fmt, marker::PhantomData};
 
 //***************************************************************************//
 
@@ -39,7 +36,6 @@ pub trait Type {
 pub struct Single;
 pub struct Plain;
 pub struct Group;
-pub struct Link;
 
 impl Type for Single {
     fn destination_type() -> DestinationType {
@@ -59,12 +55,6 @@ impl Type for Group {
     }
 }
 
-impl Type for Link {
-    fn destination_type() -> DestinationType {
-        DestinationType::Link
-    }
-}
-
 pub const NAME_HASH_LENGTH: usize = 10;
 pub const RAND_HASH_LENGTH: usize = 10;
 pub const MIN_ANNOUNCE_DATA_LENGTH: usize =
@@ -72,8 +62,6 @@ pub const MIN_ANNOUNCE_DATA_LENGTH: usize =
 
 #[derive(Copy, Clone)]
 pub struct DestinationName {
-    // pub app_name: &'a str,
-    // pub aspects: &'a str,
     pub hash: Hash,
 }
 
@@ -114,7 +102,7 @@ pub struct DestinationDesc {
 
 impl fmt::Display for DestinationDesc {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "/{}/", self.address_hash)?;
+        write!(f, "{}", self.address_hash)?;
 
         Ok(())
     }
@@ -255,7 +243,7 @@ impl Destination<PrivateIdentity, Input, Single> {
         let mut packet_data = PacketDataBuffer::new();
 
         let rand_hash = Hash::new_from_rand(rng);
-        let rand_hash = &rand_hash.as_slice()[..10];
+        let rand_hash = &rand_hash.as_slice()[..RAND_HASH_LENGTH];
 
         let pub_key = self.identity.as_identity().public_key_bytes();
         let verifying_key = self.identity.as_identity().verifying_key_bytes();

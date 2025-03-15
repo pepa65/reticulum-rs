@@ -1,25 +1,24 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use rand_core::OsRng;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 
 use tokio::sync::broadcast;
 
+use crate::destination::link::Link;
+use crate::destination::link::LinkHandleResult;
 use crate::destination::DestinationDesc;
 use crate::destination::DestinationHandleStatus;
 use crate::destination::DestinationName;
 use crate::destination::SingleInputDestination;
 use crate::hash::AddressHash;
 use crate::identity::PrivateIdentity;
-use crate::link::LinkHandleResult;
 use crate::packet::DestinationType;
-use crate::packet::PacketContext;
 use crate::{
-    destination::SingleOutputDestination,
     error::RnsError,
     iface::PacketChannel,
-    link::Link,
     packet::{Packet, PacketType},
 };
 
@@ -76,7 +75,7 @@ impl Transport {
             out_packet_tx: out_packet_tx.clone(),
         }));
 
-        let handler_task = {
+        {
             let handler = handler.clone();
             tokio::spawn(manage_transport(handler))
         };
@@ -91,10 +90,17 @@ impl Transport {
     }
 
     pub fn packet_channel(&self) -> PacketChannel {
-        PacketChannel {
-            in_tx: self.in_packet_tx.clone(),
-            out_rx: self.out_packet_tx.subscribe(),
-        }
+        PacketChannel::new(self.in_packet_tx.clone(), self.out_packet_tx.subscribe())
+    }
+
+    pub fn announce(
+        &self,
+        destination: &SingleInputDestination,
+        app_data: Option<&[u8]>,
+    ) -> Result<(), RnsError> {
+        let packet = destination.announce(OsRng, app_data)?;
+
+        self.send(packet)
     }
 
     pub fn recv(&self) -> broadcast::Receiver<Packet> {
@@ -207,7 +213,7 @@ fn handle_data<'a>(packet: &Packet, handler: &mut MutexGuard<'a, TransportHandle
     }
 
     if packet.header.destination_type == DestinationType::Single {
-        if let Some(destination) = handler
+        if let Some(_destination) = handler
             .single_in_destinations
             .get(&packet.destination)
             .cloned()
@@ -252,14 +258,12 @@ async fn manage_transport(handler: Arc<Mutex<TransportHandler>>) {
         tokio::select! {
             recv = in_packet_rx.recv() => {
                 if let Ok(packet) = recv {
-
-                let handler = &mut handler.lock().unwrap();
+                    let handler = &mut handler.lock().unwrap();
                     match packet.header.packet_type {
                         PacketType::Announce => { }
                         PacketType::LinkRequest => handle_link_request(&packet, handler),
                         PacketType::Proof => handle_proof(&packet, handler),
                         PacketType::Data => handle_data(&packet, handler),
-                        _ => {}
                     }
                 }
             }

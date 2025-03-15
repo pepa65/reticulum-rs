@@ -50,3 +50,7 @@ path = "examples/tcp_app.rs"
 [[example]]
 name = "link-client"
 path = "examples/link_client.rs"
+
+[[example]]
+name = "kaonic-client"
+path = "examples/kaonic_client.rs"
