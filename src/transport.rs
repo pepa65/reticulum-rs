@@ -63,9 +63,7 @@ struct TransportHandler {
 
 pub struct Transport {
     in_packet_tx: broadcast::Sender<Packet>,
-    in_packet_rx: broadcast::Receiver<Packet>,
     out_packet_tx: broadcast::Sender<Packet>,
-    out_packet_rx: broadcast::Receiver<Packet>,
     link_in_event_tx: broadcast::Sender<LinkEventData>,
     link_out_event_tx: broadcast::Sender<LinkEventData>,
     handler: Arc<Mutex<TransportHandler>>,
@@ -73,8 +71,8 @@ pub struct Transport {
 
 impl Transport {
     pub fn new() -> Self {
-        let (out_packet_tx, out_packet_rx) = tokio::sync::broadcast::channel(32);
-        let (in_packet_tx, in_packet_rx) = tokio::sync::broadcast::channel(32);
+        let (out_packet_tx, _) = tokio::sync::broadcast::channel(32);
+        let (in_packet_tx, _) = tokio::sync::broadcast::channel(32);
         let (out_destination_tx, _) = tokio::sync::broadcast::channel(16);
         let (link_in_event_tx, _) = tokio::sync::broadcast::channel(32);
         let (link_out_event_tx, _) = tokio::sync::broadcast::channel(32);
@@ -97,9 +95,7 @@ impl Transport {
 
         Self {
             out_packet_tx,
-            out_packet_rx,
             in_packet_tx,
-            in_packet_rx,
             link_in_event_tx,
             link_out_event_tx,
             handler,
@@ -384,9 +380,33 @@ fn handle_keep_links<'a>(handler: &mut MutexGuard<'a, TransportHandler>) {
 }
 
 async fn manage_transport(handler: Arc<Mutex<TransportHandler>>) {
-    let mut in_packet_rx = {
-        let handler = handler.lock().unwrap();
-        handler.in_packet_rx.resubscribe()
+    let _packet_task = {
+        let handler = handler.clone();
+
+        log::trace!("tp: start packet task");
+
+        tokio::spawn(async move {
+            let mut in_packet_rx = {
+                let handler = handler.lock().unwrap();
+                handler.in_packet_rx.resubscribe()
+            };
+
+            loop {
+                tokio::select! {
+                    recv = in_packet_rx.recv() => {
+                        if let Ok(packet) = recv {
+                            let handler = &mut handler.lock().unwrap();
+                            match packet.header.packet_type {
+                                PacketType::Announce => handle_announce(&packet, handler),
+                                PacketType::LinkRequest => handle_link_request(&packet, handler),
+                                PacketType::Proof => handle_proof(&packet, handler),
+                                PacketType::Data => handle_data(&packet, handler),
+                            }
+                        }
+                    }
+                };
+            }
+        })
     };
 
     let mut link_check_interval = tokio::time::interval(Duration::from_secs(10));
@@ -394,17 +414,6 @@ async fn manage_transport(handler: Arc<Mutex<TransportHandler>>) {
 
     loop {
         tokio::select! {
-            recv = in_packet_rx.recv() => {
-                if let Ok(packet) = recv {
-                    let handler = &mut handler.lock().unwrap();
-                    match packet.header.packet_type {
-                        PacketType::Announce => handle_announce(&packet, handler),
-                        PacketType::LinkRequest => handle_link_request(&packet, handler),
-                        PacketType::Proof => handle_proof(&packet, handler),
-                        PacketType::Data => handle_data(&packet, handler),
-                    }
-                }
-            }
             _ = link_check_interval.tick() => {
                     let handler = &mut handler.lock().unwrap();
                     handle_check_links(handler);

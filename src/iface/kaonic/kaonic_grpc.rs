@@ -8,6 +8,7 @@ use proto::device_client::DeviceClient;
 use proto::radio_client::RadioClient;
 use proto::RadioFrame;
 use tokio_stream::StreamExt;
+use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
 
 use crate::buffer::{InputBuffer, OutputBuffer};
@@ -41,7 +42,7 @@ impl KaonicGrpcInterface {
         Interface::<KaonicGrpc>::new(
             handler,
             channel,
-            |mut channel, handler, cancel| async move {
+            |channel, handler, cancel| async move {
                 let config = { handler.lock().unwrap().config.clone() };
                 loop {
                     if cancel.is_cancelled() {
@@ -80,52 +81,94 @@ impl KaonicGrpcInterface {
 
                     log::info!("kaonic_grpc: connected to <{}>", config.addr);
 
-                    loop {
-                        const BUFFER_SIZE: usize = std::mem::size_of::<Packet>() * 3;
+                    const BUFFER_SIZE: usize = std::mem::size_of::<Packet>() * 3;
 
-                        let mut tx_buffer = [0u8; BUFFER_SIZE];
-                        let mut rx_buffer = [0u8; BUFFER_SIZE];
+                    let stop = CancellationToken::new();
 
-                        tokio::select! {
-                            _ = cancel.cancelled() => {
-                                    break;
-                            }
-                            Some(result) = recv_stream.next() => {
-                                if let Ok(response) = result {
-                                    if let Some(frame) = response.frame {
-                                        if frame.length > 0 {
-                                            if let Ok(buf) = decode_frame_to_buffer(&frame, &mut rx_buffer[..]) {
-                                                if let Ok(packet) = Packet::deserialize(&mut InputBuffer::new(buf)) {
-                                                        let _ = channel.send_rx(packet).await;
-                                                } else {
-                                                    log::warn!("kaonic_grpc: couldn't decode packet");
+                    let rx_task = {
+                        let cancel = cancel.clone();
+                        let stop = stop.clone();
+                        let mut channel = channel.clone();
+
+                        tokio::spawn(async move {
+                            let mut rx_buffer = [0u8; BUFFER_SIZE];
+
+                            log::trace!("kaonic_grpc: start rx task");
+
+                            loop {
+                                tokio::select! {
+                                    _ = cancel.cancelled() => {
+                                            break;
+                                    }
+                                    _ = stop.cancelled() => {
+                                            break;
+                                    }
+                                    Some(result) = recv_stream.next() => {
+                                        if let Ok(response) = result {
+                                            if let Some(frame) = response.frame {
+                                                if frame.length > 0 {
+                                                    if let Ok(buf) = decode_frame_to_buffer(&frame, &mut rx_buffer[..]) {
+                                                        if let Ok(packet) = Packet::deserialize(&mut InputBuffer::new(buf)) {
+                                                                let _ = channel.send_rx(packet).await;
+                                                        } else {
+                                                            log::warn!("kaonic_grpc: couldn't decode packet");
+                                                        }
+                                                    }
                                                 }
                                             }
                                         }
                                     }
                                 }
                             }
-                            Ok(packet) = channel.wait_for_tx() => {
-                                let mut output = OutputBuffer::new(&mut tx_buffer);
-                                if let Ok(_) = packet.serialize(&mut output) {
 
-                                    let frame = encode_buffer_to_frame(output.as_mut_slice());
+                            stop.cancel();
+                        })
+                    };
 
-                                    let result = radio_client.transmit(proto::TransmitRequest{
-                                        module: config.module as u32,
-                                        frame: Some(frame),
-                                    }).await;
+                    let tx_task = {
+                        let cancel = cancel.clone();
+                        let stop = stop.clone();
+                        let mut channel = channel.clone();
 
-                                    if let Err(err) = result {
-                                        log::warn!("kaonic_grpc: tx err = '{}'", err);
-                                        if err.code() == tonic::Code::Unknown || err.code() == tonic::Code::Unavailable {
+                        tokio::spawn(async move {
+                            let mut tx_buffer = [0u8; BUFFER_SIZE];
+                            log::trace!("kaonic_grpc: start tx task");
+                            loop {
+                                tokio::select! {
+                                    _ = cancel.cancelled() => {
                                             break;
+                                    }
+                                    _ = stop.cancelled() => {
+                                            break;
+                                    }
+                                    Ok(packet) = channel.wait_for_tx() => {
+                                        let mut output = OutputBuffer::new(&mut tx_buffer);
+                                        if let Ok(_) = packet.serialize(&mut output) {
+
+                                            let frame = encode_buffer_to_frame(output.as_mut_slice());
+
+                                            let result = radio_client.transmit(proto::TransmitRequest{
+                                                module: config.module as u32,
+                                                frame: Some(frame),
+                                            }).await;
+
+                                            if let Err(err) = result {
+                                                log::warn!("kaonic_grpc: tx err = '{}'", err);
+                                                if err.code() == tonic::Code::Unknown || err.code() == tonic::Code::Unavailable {
+                                                    break;
+                                                }
+                                            }
                                         }
                                     }
-                                }
+                                };
                             }
-                        }
-                    }
+
+                            stop.cancel();
+                        })
+                    };
+
+                    tx_task.await.unwrap();
+                    rx_task.await.unwrap();
 
                     log::info!("kaonic_grpc: disconnected from <{}>", config.addr);
                 }

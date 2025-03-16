@@ -33,7 +33,7 @@ impl TcpClientInterface {
         Interface::<TcpClient>::new(
             handler,
             channel,
-            |mut channel, handler, cancel| async move {
+            |channel, handler, cancel| async move {
                 let config = { handler.lock().unwrap().config.clone() };
                 loop {
                     if cancel.is_cancelled() {
@@ -50,61 +50,91 @@ impl TcpClientInterface {
                         continue;
                     }
 
-                    let mut stream = stream.unwrap();
+                    let stream = stream.unwrap();
+                    let (read_stream, write_stream) = stream.into_split();
 
                     log::info!("tcp_client connected to <{}>", config.addr);
 
-                    loop {
-                        const BUFFER_SIZE: usize = std::mem::size_of::<Packet>() * 3;
+                    const BUFFER_SIZE: usize = std::mem::size_of::<Packet>() * 3;
 
-                        let mut hdlc_tx_buffer = [0u8; BUFFER_SIZE];
-                        let mut hdlc_rx_buffer = [0u8; BUFFER_SIZE];
+                    let rx_task = {
+                        let cancel = cancel.clone();
+                        let mut channel = channel.clone();
+                        let mut stream = read_stream;
 
-                        let mut tx_buffer = [0u8; BUFFER_SIZE];
-                        let mut rx_buffer = [0u8; BUFFER_SIZE];
+                        tokio::spawn(async move {
+                            loop {
+                                let mut hdlc_rx_buffer = [0u8; BUFFER_SIZE];
 
-                        tokio::select! {
-                            _ = cancel.cancelled() => {
-                                    break;
-                            }
-                            result = stream.read(&mut rx_buffer) => {
-                                    match result {
-                                        Ok(0) => {
-                                            log::warn!("tcp_client: connection closed");
+                                let mut rx_buffer = [0u8; BUFFER_SIZE];
+
+                                tokio::select! {
+                                    _ = cancel.cancelled() => {
                                             break;
-                                        }
-                                        Ok(n) => {
-                                            let mut output = OutputBuffer::new(&mut hdlc_rx_buffer[..]);
-                                            if let Ok(_) = Hdlc::decode(&rx_buffer[..n], &mut output) {
-                                                if let Ok(packet) = Packet::deserialize(&mut InputBuffer::new(output.as_slice())) {
-                                                    let _ = channel.send_rx(packet).await;
-                                                } else {
-                                                    log::warn!("tcp_client: couldn't decode packet");
+                                    }
+                                    result = stream.read(&mut rx_buffer) => {
+                                            match result {
+                                                Ok(0) => {
+                                                    log::warn!("tcp_client: connection closed");
+                                                    break;
                                                 }
-                                            } else {
-                                                log::warn!("tcp_client: couldn't decode hdlc frame");
+                                                Ok(n) => {
+                                                    let mut output = OutputBuffer::new(&mut hdlc_rx_buffer[..]);
+                                                    if let Ok(_) = Hdlc::decode(&rx_buffer[..n], &mut output) {
+                                                        if let Ok(packet) = Packet::deserialize(&mut InputBuffer::new(output.as_slice())) {
+                                                            let _ = channel.send_rx(packet).await;
+                                                        } else {
+                                                            log::warn!("tcp_client: couldn't decode packet");
+                                                        }
+                                                    } else {
+                                                        log::warn!("tcp_client: couldn't decode hdlc frame");
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    log::warn!("tcp_client: connection error {}", e);
+                                                    break;
+                                                }
+                                            }
+                                        },
+                                };
+                            }
+                        })
+                    };
+
+                    let tx_task = {
+                        let cancel = cancel.clone();
+                        let mut channel = channel.clone();
+                        let mut stream = write_stream;
+
+                        tokio::spawn(async move {
+                            loop {
+                                let mut hdlc_tx_buffer = [0u8; BUFFER_SIZE];
+
+                                let mut tx_buffer = [0u8; BUFFER_SIZE];
+
+                                tokio::select! {
+                                    _ = cancel.cancelled() => {
+                                            break;
+                                    }
+                                    Ok(packet) = channel.wait_for_tx() => {
+                                        let mut output = OutputBuffer::new(&mut tx_buffer);
+                                        if let Ok(_) = packet.serialize(&mut output) {
+
+                                            let mut hdlc_output = OutputBuffer::new(&mut hdlc_tx_buffer[..]);
+
+                                            if let Ok(_) = Hdlc::encode(output.as_slice(), &mut hdlc_output) {
+                                                let _ = stream.write_all(hdlc_output.as_slice()).await;
+                                                let _ = stream.flush().await;
                                             }
                                         }
-                                        Err(e) => {
-                                            log::warn!("tcp_client: connection error {}", e);
-                                            break;
-                                        }
                                     }
-                                },
-                            Ok(packet) = channel.wait_for_tx() => {
-                                let mut output = OutputBuffer::new(&mut tx_buffer);
-                                if let Ok(_) = packet.serialize(&mut output) {
-
-                                    let mut hdlc_output = OutputBuffer::new(&mut hdlc_tx_buffer[..]);
-
-                                    if let Ok(_) = Hdlc::encode(output.as_slice(), &mut hdlc_output) {
-                                        let _ = stream.write_all(hdlc_output.as_slice()).await;
-                                        let _ = stream.flush().await;
-                                    }
-                                }
+                                };
                             }
-                        }
-                    }
+                        })
+                    };
+
+                    tx_task.await.unwrap();
+                    rx_task.await.unwrap();
 
                     log::info!("tcp_client: disconnected from <{}>", config.addr);
                 }

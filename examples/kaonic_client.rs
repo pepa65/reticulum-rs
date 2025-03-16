@@ -2,8 +2,7 @@ use std::env;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use rand_core::OsRng;
-use reticulum::destination::{DestinationAnnounce, DestinationName, SingleInputDestination};
+use reticulum::destination::DestinationName;
 use reticulum::identity::PrivateIdentity;
 use reticulum::iface::kaonic::kaonic_grpc::{KaonicGrpcConfig, KaonicGrpcInterface};
 use reticulum::iface::kaonic::RadioModule;
@@ -46,7 +45,6 @@ async fn main() {
         let transport = transport.clone();
         tokio::spawn(async move {
             loop {
-
                 log::trace!("announce");
 
                 transport
