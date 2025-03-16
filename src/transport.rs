@@ -1,6 +1,7 @@
 use alloc::sync::Arc;
 use rand_core::OsRng;
 use std::collections::HashMap;
+use std::ops::Add;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
 use std::time::Duration;
@@ -71,11 +72,11 @@ pub struct Transport {
 
 impl Transport {
     pub fn new() -> Self {
-        let (out_packet_tx, _) = tokio::sync::broadcast::channel(32);
-        let (in_packet_tx, _) = tokio::sync::broadcast::channel(32);
+        let (out_packet_tx, _) = tokio::sync::broadcast::channel(1024);
+        let (in_packet_tx, _) = tokio::sync::broadcast::channel(1024);
         let (out_destination_tx, _) = tokio::sync::broadcast::channel(16);
-        let (link_in_event_tx, _) = tokio::sync::broadcast::channel(32);
-        let (link_out_event_tx, _) = tokio::sync::broadcast::channel(32);
+        let (link_in_event_tx, _) = tokio::sync::broadcast::channel(1024);
+        let (link_out_event_tx, _) = tokio::sync::broadcast::channel(1024);
 
         let handler = Arc::new(Mutex::new(TransportHandler {
             single_in_destinations: HashMap::new(),
@@ -125,10 +126,54 @@ impl Transport {
     }
 
     pub fn send(&self, packet: Packet) -> Result<(), RnsError> {
-        self.out_packet_tx
-            .send(packet)
-            .map_err(|_| RnsError::ConnectionError)
-            .map(|_| ())
+        let result = self.out_packet_tx.send(packet);
+
+        match result {
+            Ok(_) => {}
+            Err(_) => log::warn!("tp: send packet err"),
+        }
+
+        result.map_err(|_| RnsError::ConnectionError).map(|_| ())
+    }
+
+    pub fn send_to_out_links(&self, destination: &AddressHash, payload: &[u8]) {
+        let mut count = 0usize;
+        for link in self.handler.lock().unwrap().out_links.values() {
+            let link = link.lock().unwrap();
+            if link.destination().address_hash == *destination
+                && link.status() == LinkStatus::Active
+            {
+                let packet = link.data_packet(payload);
+                if let Ok(packet) = packet {
+                    let _ = self.send(packet);
+                    count += 1;
+                }
+            }
+        }
+
+        if count == 0 {
+            log::warn!("tp: no output links for {} destination", destination);
+        }
+    }
+
+    pub fn send_to_in_links(&self, destination: &AddressHash, payload: &[u8]) {
+        let mut count = 0usize;
+        for link in self.handler.lock().unwrap().in_links.values() {
+            let link = link.lock().unwrap();
+            if link.destination().address_hash == *destination
+                && link.status() == LinkStatus::Active
+            {
+                let packet = link.data_packet(payload);
+                if let Ok(packet) = packet {
+                    let _ = self.send(packet);
+                    count += 1;
+                }
+            }
+        }
+
+        if count == 0 {
+            log::warn!("tp: no input links for {} destination", destination);
+        }
     }
 
     pub fn find_out_link(&self, address: AddressHash) -> Option<Arc<Mutex<Link>>> {
@@ -151,7 +196,7 @@ impl Transport {
 
         if let Some(link) = link {
             if link.lock().unwrap().status() != LinkStatus::Closed {
-                log::debug!(
+                log::trace!(
                     "tp: use existing link {} for destination {}",
                     link.lock().unwrap().id(),
                     destination
@@ -267,6 +312,18 @@ fn handle_data<'a>(packet: &Packet, handler: &mut MutexGuard<'a, TransportHandle
     if packet.header.destination_type == DestinationType::Link {
         if let Some(link) = handler.in_links.get(&packet.destination).cloned() {
             let mut link = link.lock().unwrap();
+            let result = link.handle_packet(packet);
+            match result {
+                LinkHandleResult::KeepAlive => {
+                    let packet = link.keep_alive_packet(0xFE);
+                    handler.out_packet_tx.send(packet).unwrap();
+                }
+                _ => {}
+            }
+        }
+
+        for link in handler.out_links.values() {
+            let mut link = link.lock().unwrap();
             let _ = link.handle_packet(packet);
         }
     }
@@ -325,7 +382,11 @@ fn handle_link_request<'a>(packet: &Packet, handler: &mut MutexGuard<'a, Transpo
                 if let Ok(mut link) = link {
                     handler.out_packet_tx.send(link.prove()).unwrap();
 
-                    log::debug!("tp: save input link {}", link.id());
+                    log::debug!(
+                        "tp: save input link {} for destination {}",
+                        link.id(),
+                        link.destination().address_hash
+                    );
 
                     handler
                         .in_links
@@ -343,7 +404,7 @@ fn handle_check_links<'a>(handler: &mut MutexGuard<'a, TransportHandler>) {
         .iter()
         .filter_map(|(key, link)| {
             let mut link = link.lock().unwrap();
-            if link.elapsed() > Duration::from_secs(20) {
+            if link.elapsed() > Duration::from_secs(10) {
                 link.close();
                 Some(key.clone())
             } else {
@@ -354,6 +415,24 @@ fn handle_check_links<'a>(handler: &mut MutexGuard<'a, TransportHandler>) {
 
     for addr in links_to_remove {
         handler.in_links.remove(&addr);
+    }
+
+    let links_to_remove: Vec<AddressHash> = handler
+        .out_links
+        .iter()
+        .filter_map(|(key, link)| {
+            let mut link = link.lock().unwrap();
+            if link.elapsed() > Duration::from_secs(10) {
+                link.close();
+                Some(key.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for addr in links_to_remove {
+        handler.out_links.remove(&addr);
     }
 
     for link in handler.out_links.values() {
@@ -374,7 +453,7 @@ fn handle_keep_links<'a>(handler: &mut MutexGuard<'a, TransportHandler>) {
         let link = link.lock().unwrap();
 
         if link.status() == LinkStatus::Active {
-            let _ = handler.out_packet_tx.send(link.keep_alive_packet());
+            let _ = handler.out_packet_tx.send(link.keep_alive_packet(0xFF));
         }
     }
 }

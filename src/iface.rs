@@ -12,7 +12,7 @@ use tokio_util::sync::CancellationToken;
 use crate::error::RnsError;
 use crate::packet::Packet;
 
-const PACKET_TRACE_ENABLED: bool = false;
+const PACKET_TRACE_ENABLED: bool = true;
 
 pub struct PacketChannel {
     in_tx: broadcast::Sender<Packet>,
@@ -29,7 +29,7 @@ impl PacketChannel {
 
         if let Ok(packet) = packet {
             if PACKET_TRACE_ENABLED {
-                log::trace!("packet: >> tx {}", packet.destination);
+                log::debug!("packet: >> tx {}", packet.destination);
             }
         }
 
@@ -38,7 +38,7 @@ impl PacketChannel {
 
     pub async fn send_rx(&mut self, packet: Packet) -> Result<usize, RnsError> {
         if PACKET_TRACE_ENABLED {
-            log::trace!("packet: << rx {}", packet.destination);
+            log::debug!("packet: << rx {}", packet.destination);
         }
         self.in_tx.send(packet).map_err(|_| RnsError::PacketError)
     }

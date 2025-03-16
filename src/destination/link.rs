@@ -241,12 +241,11 @@ impl Link {
     }
 
     fn handle_data_packet(&mut self, packet: &Packet) -> LinkHandleResult {
-        self.request_time = Instant::now();
-
         match packet.context {
             PacketContext::None => {
                 let mut buffer = [0u8; PACKET_MDU];
                 if let Ok(plain_text) = self.decrypt(packet.data.as_slice(), &mut buffer[..]) {
+                    self.request_time = Instant::now();
                     self.post_event(LinkEvent::Data(LinkPayload::new_from_slice(plain_text)));
                 } else {
                     log::error!("link: can't decrypt packet");
@@ -254,7 +253,14 @@ impl Link {
             }
             PacketContext::KeepAlive => {
                 if packet.data.len() >= 1 && packet.data.as_slice()[0] == 0xFF {
+                    self.request_time = Instant::now();
+                    log::debug!("link: keep-alive request {}", self.id);
                     return LinkHandleResult::KeepAlive;
+                }
+                if packet.data.len() >= 1 && packet.data.as_slice()[0] == 0xFE {
+                    log::debug!("link: keep-alive response {}", self.id);
+                    self.request_time = Instant::now();
+                    return LinkHandleResult::None;
                 }
             }
             _ => {}
@@ -276,8 +282,6 @@ impl Link {
                 {
                     if let Ok(identity) = validate_proof_packet(&self.destination, &self.id, packet)
                     {
-                        log::debug!("link: proof valid");
-
                         self.handshake(identity);
 
                         self.status = LinkStatus::Active;
@@ -325,9 +329,9 @@ impl Link {
         })
     }
 
-    pub fn keep_alive_packet(&self) -> Packet {
+    pub fn keep_alive_packet(&self, data: u8) -> Packet {
         let mut packet_data = PacketDataBuffer::new();
-        packet_data.safe_write(&[0xFFu8]);
+        packet_data.safe_write(&[data]);
 
         Packet {
             header: Header {
@@ -351,6 +355,10 @@ impl Link {
     pub fn decrypt<'a>(&self, text: &[u8], out_buf: &'a mut [u8]) -> Result<&'a [u8], RnsError> {
         self.priv_identity
             .decrypt(OsRng, text, &self.derived_key, out_buf)
+    }
+
+    pub fn destination(&self) -> &DestinationDesc {
+        &self.destination
     }
 
     pub fn create_rtt(&self) -> Packet {
