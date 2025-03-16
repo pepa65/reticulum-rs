@@ -1,14 +1,16 @@
 use alloc::sync::Arc;
-use alloc::vec::Vec;
 use rand_core::OsRng;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::sync::MutexGuard;
+use std::time::Duration;
 
 use tokio::sync::broadcast;
 
 use crate::destination::link::Link;
+use crate::destination::link::LinkEventData;
 use crate::destination::link::LinkHandleResult;
+use crate::destination::link::LinkStatus;
 use crate::destination::DestinationAnnounce;
 use crate::destination::DestinationDesc;
 use crate::destination::DestinationHandleStatus;
@@ -56,6 +58,7 @@ struct TransportHandler {
     single_out_destinations: HashMap<AddressHash, Arc<Mutex<SingleOutputDestination>>>,
     out_links: HashMap<AddressHash, Arc<Mutex<Link>>>,
     in_links: HashMap<AddressHash, Arc<Mutex<Link>>>,
+    link_in_event_tx: broadcast::Sender<LinkEventData>,
 }
 
 pub struct Transport {
@@ -63,6 +66,8 @@ pub struct Transport {
     in_packet_rx: broadcast::Receiver<Packet>,
     out_packet_tx: broadcast::Sender<Packet>,
     out_packet_rx: broadcast::Receiver<Packet>,
+    link_in_event_tx: broadcast::Sender<LinkEventData>,
+    link_out_event_tx: broadcast::Sender<LinkEventData>,
     handler: Arc<Mutex<TransportHandler>>,
 }
 
@@ -71,6 +76,8 @@ impl Transport {
         let (out_packet_tx, out_packet_rx) = tokio::sync::broadcast::channel(32);
         let (in_packet_tx, in_packet_rx) = tokio::sync::broadcast::channel(32);
         let (out_destination_tx, _) = tokio::sync::broadcast::channel(16);
+        let (link_in_event_tx, _) = tokio::sync::broadcast::channel(32);
+        let (link_out_event_tx, _) = tokio::sync::broadcast::channel(32);
 
         let handler = Arc::new(Mutex::new(TransportHandler {
             single_in_destinations: HashMap::new(),
@@ -80,6 +87,7 @@ impl Transport {
             in_packet_rx: in_packet_tx.subscribe(),
             out_packet_tx: out_packet_tx.clone(),
             out_destination_tx,
+            link_in_event_tx: link_in_event_tx.clone(),
         }));
 
         {
@@ -92,6 +100,8 @@ impl Transport {
             out_packet_rx,
             in_packet_tx,
             in_packet_rx,
+            link_in_event_tx,
+            link_out_event_tx,
             handler,
         }
     }
@@ -144,10 +154,19 @@ impl Transport {
             .cloned();
 
         if let Some(link) = link {
-            return link;
+            if link.lock().unwrap().status() != LinkStatus::Closed {
+                log::debug!(
+                    "tp: use existing link {} for destination {}",
+                    link.lock().unwrap().id(),
+                    destination
+                );
+                return link;
+            } else {
+                log::warn!("tp: link was closed");
+            }
         }
 
-        let mut link = Link::new(destination);
+        let mut link = Link::new(destination, self.link_out_event_tx.clone());
 
         let packet = link.request();
 
@@ -168,6 +187,14 @@ impl Transport {
             .insert(destination.address_hash, link.clone());
 
         link
+    }
+
+    pub fn out_link_events(&self) -> broadcast::Receiver<LinkEventData> {
+        self.link_out_event_tx.subscribe()
+    }
+
+    pub fn in_link_events(&self) -> broadcast::Receiver<LinkEventData> {
+        self.link_in_event_tx.subscribe()
     }
 
     pub fn add_destination(
@@ -262,20 +289,20 @@ fn handle_data<'a>(packet: &Packet, handler: &mut MutexGuard<'a, TransportHandle
 
 fn handle_announce<'a>(packet: &Packet, handler: &mut MutexGuard<'a, TransportHandler>) {
     if let Ok(destination) = DestinationAnnounce::validate(packet) {
+        let destination = Arc::new(Mutex::new(destination));
+
         if !handler
             .single_out_destinations
             .contains_key(&packet.destination)
         {
             log::trace!("tp: new announce for {}", packet.destination);
 
-            let destination = Arc::new(Mutex::new(destination));
-
             handler
                 .single_out_destinations
                 .insert(packet.destination, destination.clone());
-
-            let _ = handler.out_destination_tx.send(destination);
         }
+
+        let _ = handler.out_destination_tx.send(destination);
     }
 }
 
@@ -289,16 +316,69 @@ fn handle_link_request<'a>(packet: &Packet, handler: &mut MutexGuard<'a, Transpo
     {
         let mut destination = destination.lock().unwrap();
         match destination.handle_packet(packet) {
-            DestinationHandleStatus::LinkProof(link, packet) => {
+            DestinationHandleStatus::LinkProof => {
                 log::trace!("tp: send proof to {}", packet.destination);
 
-                handler.out_packet_tx.send(packet).unwrap();
+                let link = Link::new_from_request(
+                    packet,
+                    destination.sign_key().clone(),
+                    destination.desc,
+                    handler.link_in_event_tx.clone(),
+                );
 
-                handler
-                    .in_links
-                    .insert(*link.id(), Arc::new(Mutex::new(link)));
+                if let Ok(mut link) = link {
+                    handler.out_packet_tx.send(link.prove()).unwrap();
+
+                    log::debug!("tp: save input link {}", link.id());
+
+                    handler
+                        .in_links
+                        .insert(*link.id(), Arc::new(Mutex::new(link)));
+                }
             }
             DestinationHandleStatus::None => {}
+        }
+    }
+}
+
+fn handle_check_links<'a>(handler: &mut MutexGuard<'a, TransportHandler>) {
+    let links_to_remove: Vec<AddressHash> = handler
+        .in_links
+        .iter()
+        .filter_map(|(key, link)| {
+            let mut link = link.lock().unwrap();
+            if link.elapsed() > Duration::from_secs(20) {
+                link.close();
+                Some(key.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    for addr in links_to_remove {
+        handler.in_links.remove(&addr);
+    }
+
+    for link in handler.out_links.values() {
+        let mut link = link.lock().unwrap();
+
+        if link.status() == LinkStatus::Pending {
+            if link.elapsed() > Duration::from_secs(5) {
+                log::warn!("tp: repeat link request {}", link.id());
+
+                let _ = handler.out_packet_tx.send(link.request());
+            }
+        }
+    }
+}
+
+fn handle_keep_links<'a>(handler: &mut MutexGuard<'a, TransportHandler>) {
+    for link in handler.out_links.values() {
+        let link = link.lock().unwrap();
+
+        if link.status() == LinkStatus::Active {
+            let _ = handler.out_packet_tx.send(link.keep_alive_packet());
         }
     }
 }
@@ -308,6 +388,9 @@ async fn manage_transport(handler: Arc<Mutex<TransportHandler>>) {
         let handler = handler.lock().unwrap();
         handler.in_packet_rx.resubscribe()
     };
+
+    let mut link_check_interval = tokio::time::interval(Duration::from_secs(10));
+    let mut link_keep_interval = tokio::time::interval(Duration::from_secs(5));
 
     loop {
         tokio::select! {
@@ -321,6 +404,14 @@ async fn manage_transport(handler: Arc<Mutex<TransportHandler>>) {
                         PacketType::Data => handle_data(&packet, handler),
                     }
                 }
+            }
+            _ = link_check_interval.tick() => {
+                    let handler = &mut handler.lock().unwrap();
+                    handle_check_links(handler);
+            }
+            _ = link_keep_interval.tick() => {
+                    let handler = &mut handler.lock().unwrap();
+                    handle_keep_links(handler);
             }
         }
     }

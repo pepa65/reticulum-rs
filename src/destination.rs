@@ -1,6 +1,6 @@
 pub mod link;
 
-use ed25519_dalek::{Signature, VerifyingKey, SIGNATURE_LENGTH};
+use ed25519_dalek::{Signature, SigningKey, VerifyingKey, SIGNATURE_LENGTH};
 use rand_core::CryptoRngCore;
 use x25519_dalek::PublicKey;
 
@@ -215,7 +215,7 @@ impl<I: HashIdentity, D: Direction, T: Type> Destination<I, D, T> {
 
 pub enum DestinationHandleStatus {
     None,
-    LinkProof(link::Link, Packet),
+    LinkProof,
 }
 
 impl Destination<PrivateIdentity, Input, Single> {
@@ -298,19 +298,17 @@ impl Destination<PrivateIdentity, Input, Single> {
 
         match packet.header.packet_type {
             PacketType::LinkRequest => {
-                if let Ok(mut new_link) = link::Link::new_from_request(
-                    packet,
-                    self.identity.sign_key().clone(),
-                    self.desc,
-                ) {
-                    let packet = new_link.prove();
-                    return DestinationHandleStatus::LinkProof(new_link, packet);
-                }
+                // TODO: check prove strategy
+                return DestinationHandleStatus::LinkProof;
             }
             _ => {}
         }
 
         DestinationHandleStatus::None
+    }
+
+    pub fn sign_key(&self) -> &SigningKey {
+        self.identity.sign_key()
     }
 }
 

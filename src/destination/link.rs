@@ -1,5 +1,6 @@
 use std::{
     cmp::min,
+    ops::Add,
     time::{Duration, Instant},
 };
 
@@ -70,6 +71,10 @@ impl LinkPayload {
         }
     }
 
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
     pub fn as_slice(&self) -> &[u8] {
         &self.buffer[..self.len]
     }
@@ -101,6 +106,7 @@ impl From<&Packet> for LinkId {
 pub enum LinkHandleResult {
     None,
     Activated,
+    KeepAlive,
 }
 
 #[derive(Clone)]
@@ -108,6 +114,13 @@ pub enum LinkEvent {
     Activated,
     Data(LinkPayload),
     Closed,
+}
+
+#[derive(Clone)]
+pub struct LinkEventData {
+    pub id: LinkId,
+    pub address_hash: AddressHash,
+    pub event: LinkEvent,
 }
 
 pub struct Link {
@@ -119,11 +132,14 @@ pub struct Link {
     status: LinkStatus,
     request_time: Instant,
     rtt: Duration,
-    event_tx: tokio::sync::broadcast::Sender<LinkEvent>,
+    event_tx: tokio::sync::broadcast::Sender<LinkEventData>,
 }
 
 impl Link {
-    pub fn new(destination: DestinationDesc) -> Self {
+    pub fn new(
+        destination: DestinationDesc,
+        event_tx: tokio::sync::broadcast::Sender<LinkEventData>,
+    ) -> Self {
         Self {
             id: AddressHash::new_empty(),
             destination,
@@ -133,7 +149,7 @@ impl Link {
             status: LinkStatus::Pending,
             request_time: Instant::now(),
             rtt: Duration::from_secs(0),
-            event_tx: tokio::sync::broadcast::channel(8).0,
+            event_tx,
         }
     }
 
@@ -141,6 +157,7 @@ impl Link {
         packet: &Packet,
         signing_key: SigningKey,
         destination: DestinationDesc,
+        event_tx: tokio::sync::broadcast::Sender<LinkEventData>,
     ) -> Result<Self, RnsError> {
         if packet.data.len() < PUBLIC_KEY_LENGTH * 2 {
             return Err(RnsError::InvalidArgument);
@@ -163,16 +180,12 @@ impl Link {
             status: LinkStatus::Pending,
             request_time: Instant::now(),
             rtt: Duration::from_secs(0),
-            event_tx: tokio::sync::broadcast::channel(8).0,
+            event_tx,
         };
 
         link.handshake(peer_identity);
 
         Ok(link)
-    }
-
-    pub fn event(&mut self) -> tokio::sync::broadcast::Receiver<LinkEvent> {
-        self.event_tx.subscribe()
     }
 
     pub fn request(&mut self) -> Packet {
@@ -229,13 +242,20 @@ impl Link {
     }
 
     fn handle_data_packet(&mut self, packet: &Packet) -> LinkHandleResult {
+        self.request_time = Instant::now();
+
         match packet.context {
             PacketContext::None => {
                 let mut buffer = [0u8; PACKET_MDU];
                 if let Ok(plain_text) = self.decrypt(packet.data.as_slice(), &mut buffer[..]) {
-                    let _ = self
-                        .event_tx
-                        .send(LinkEvent::Data(LinkPayload::new_from_slice(plain_text)));
+                    self.post_event(LinkEvent::Data(LinkPayload::new_from_slice(plain_text)));
+                } else {
+                    log::error!("link: can't decrypt packet");
+                }
+            }
+            PacketContext::KeepAlive => {
+                if packet.data.len() >= 1 && packet.data.as_slice()[0] == 0xFF {
+                    return LinkHandleResult::KeepAlive;
                 }
             }
             _ => {}
@@ -264,7 +284,7 @@ impl Link {
                         self.status = LinkStatus::Active;
                         self.rtt = self.request_time.elapsed();
 
-                        let _ = self.event_tx.send(LinkEvent::Activated);
+                        self.post_event(LinkEvent::Activated);
 
                         return LinkHandleResult::Activated;
                     } else {
@@ -280,8 +300,9 @@ impl Link {
 
     pub fn data_packet(&self, data: &[u8]) -> Result<Packet, RnsError> {
         if self.status != LinkStatus::Active {
-            return Err(RnsError::InvalidArgument);
+            log::warn!("link: can't create data packet for closed link");
         }
+
         let mut packet_data = PacketDataBuffer::new();
 
         let cipher_text_len = {
@@ -303,6 +324,24 @@ impl Link {
             context: PacketContext::None,
             data: packet_data,
         })
+    }
+
+    pub fn keep_alive_packet(&self) -> Packet {
+        let mut packet_data = PacketDataBuffer::new();
+        packet_data.safe_write(&[0xFFu8]);
+
+        Packet {
+            header: Header {
+                destination_type: DestinationType::Link,
+                packet_type: PacketType::Data,
+                ..Default::default()
+            },
+            ifac: None,
+            destination: self.id,
+            transport: None,
+            context: PacketContext::KeepAlive,
+            data: packet_data,
+        }
     }
 
     pub fn encrypt<'a>(&self, text: &[u8], out_buf: &'a mut [u8]) -> Result<&'a [u8], RnsError> {
@@ -358,6 +397,25 @@ impl Link {
         self.derived_key = self
             .priv_identity
             .derive_key(&self.peer_identity.public_key, Some(&self.id.as_slice()));
+    }
+
+    fn post_event(&self, event: LinkEvent) {
+        let _ = self.event_tx.send(LinkEventData {
+            id: self.id,
+            address_hash: self.destination.address_hash,
+            event,
+        });
+    }
+    pub fn close(&mut self) {
+        self.status = LinkStatus::Closed;
+
+        self.post_event(LinkEvent::Closed);
+
+        log::warn!("link: close {}", self.id);
+    }
+
+    pub fn elapsed(&self) -> Duration {
+        self.request_time.elapsed()
     }
 
     pub fn status(&self) -> LinkStatus {
