@@ -6,7 +6,7 @@ use crate::buffer::StaticBuffer;
 use crate::hash::AddressHash;
 use crate::hash::Hash;
 
-pub const PACKET_MDU: usize = 512usize;
+pub const PACKET_MDU: usize = 2048usize;
 pub const PACKET_IFAC_MAX_LENGTH: usize = 64usize;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]

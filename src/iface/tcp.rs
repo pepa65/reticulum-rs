@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use tokio::io::AsyncWriteExt;
 use tokio::net::TcpStream;
 
@@ -11,7 +13,7 @@ use tokio::io::AsyncReadExt;
 use alloc::string::String;
 
 use super::hdlc::Hdlc;
-use super::{Interface, PacketChannel};
+use super::{Interface, InterfaceChannel};
 
 #[derive(Clone)]
 pub struct TcpClientConfig {
@@ -25,120 +27,122 @@ pub struct TcpClient {
 pub type TcpClientInterface = Interface<TcpClient>;
 
 impl TcpClientInterface {
-    pub fn start(config: TcpClientConfig, channel: PacketChannel) -> Self {
+    pub fn start(config: TcpClientConfig, channel: InterfaceChannel) -> Self {
         log::debug!("tcp_client: start new iface <{}>", config.addr);
 
         let handler = TcpClient { config };
 
-        Interface::<TcpClient>::new(
-            handler,
-            channel,
-            |channel, handler, cancel| async move {
-                let config = { handler.lock().unwrap().config.clone() };
-                loop {
-                    if cancel.is_cancelled() {
-                        break;
-                    }
+        Interface::<TcpClient>::new(handler, channel, |channel, handler, cancel| async move {
+            let config = { handler.lock().unwrap().config.clone() };
+            let (rx_channel, tx_channel) = channel.split();
 
-                    let stream = TcpStream::connect(config.addr.clone())
-                        .await
-                        .map_err(|_| RnsError::ConnectionError);
+            let rx_channel = Arc::new(rx_channel);
+            let tx_channel = Arc::new(tokio::sync::Mutex::new(tx_channel));
 
-                    if let Err(_) = stream {
-                        log::info!("tcp_client: couldn't connect to <{}>", config.addr);
-                        tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                        continue;
-                    }
+            loop {
+                if cancel.is_cancelled() {
+                    break;
+                }
 
-                    let stream = stream.unwrap();
-                    let (read_stream, write_stream) = stream.into_split();
+                let stream = TcpStream::connect(config.addr.clone())
+                    .await
+                    .map_err(|_| RnsError::ConnectionError);
 
-                    log::info!("tcp_client connected to <{}>", config.addr);
+                if let Err(_) = stream {
+                    log::info!("tcp_client: couldn't connect to <{}>", config.addr);
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                    continue;
+                }
 
-                    const BUFFER_SIZE: usize = std::mem::size_of::<Packet>() * 3;
+                let stream = stream.unwrap();
+                let (read_stream, write_stream) = stream.into_split();
 
-                    let rx_task = {
-                        let cancel = cancel.clone();
-                        let mut channel = channel.clone();
-                        let mut stream = read_stream;
+                log::info!("tcp_client connected to <{}>", config.addr);
 
-                        tokio::spawn(async move {
-                            loop {
-                                let mut hdlc_rx_buffer = [0u8; BUFFER_SIZE];
+                const BUFFER_SIZE: usize = std::mem::size_of::<Packet>() * 3;
 
-                                let mut rx_buffer = [0u8; BUFFER_SIZE];
+                let rx_task = {
+                    let cancel = cancel.clone();
+                    let rx_channel = rx_channel.clone();
+                    let mut stream = read_stream;
 
-                                tokio::select! {
-                                    _ = cancel.cancelled() => {
-                                            break;
-                                    }
-                                    result = stream.read(&mut rx_buffer) => {
-                                            match result {
-                                                Ok(0) => {
-                                                    log::warn!("tcp_client: connection closed");
-                                                    break;
-                                                }
-                                                Ok(n) => {
-                                                    let mut output = OutputBuffer::new(&mut hdlc_rx_buffer[..]);
-                                                    if let Ok(_) = Hdlc::decode(&rx_buffer[..n], &mut output) {
-                                                        if let Ok(packet) = Packet::deserialize(&mut InputBuffer::new(output.as_slice())) {
-                                                            let _ = channel.send_rx(packet).await;
-                                                        } else {
-                                                            log::warn!("tcp_client: couldn't decode packet");
-                                                        }
+                    tokio::spawn(async move {
+                        loop {
+                            let mut hdlc_rx_buffer = [0u8; BUFFER_SIZE];
+
+                            let mut rx_buffer = [0u8; BUFFER_SIZE];
+
+                            tokio::select! {
+                                _ = cancel.cancelled() => {
+                                        break;
+                                }
+                                result = stream.read(&mut rx_buffer) => {
+                                        match result {
+                                            Ok(0) => {
+                                                log::warn!("tcp_client: connection closed");
+                                                break;
+                                            }
+                                            Ok(n) => {
+                                                let mut output = OutputBuffer::new(&mut hdlc_rx_buffer[..]);
+                                                if let Ok(_) = Hdlc::decode(&rx_buffer[..n], &mut output) {
+                                                    if let Ok(packet) = Packet::deserialize(&mut InputBuffer::new(output.as_slice())) {
+                                                        let _ = rx_channel.send(packet).await;
                                                     } else {
-                                                        log::warn!("tcp_client: couldn't decode hdlc frame");
+                                                        log::warn!("tcp_client: couldn't decode packet");
                                                     }
-                                                }
-                                                Err(e) => {
-                                                    log::warn!("tcp_client: connection error {}", e);
-                                                    break;
+                                                } else {
+                                                    log::warn!("tcp_client: couldn't decode hdlc frame");
                                                 }
                                             }
-                                        },
-                                };
-                            }
-                        })
-                    };
-
-                    let tx_task = {
-                        let cancel = cancel.clone();
-                        let mut channel = channel.clone();
-                        let mut stream = write_stream;
-
-                        tokio::spawn(async move {
-                            loop {
-                                let mut hdlc_tx_buffer = [0u8; BUFFER_SIZE];
-
-                                let mut tx_buffer = [0u8; BUFFER_SIZE];
-
-                                tokio::select! {
-                                    _ = cancel.cancelled() => {
-                                            break;
-                                    }
-                                    Ok(packet) = channel.wait_for_tx() => {
-                                        let mut output = OutputBuffer::new(&mut tx_buffer);
-                                        if let Ok(_) = packet.serialize(&mut output) {
-
-                                            let mut hdlc_output = OutputBuffer::new(&mut hdlc_tx_buffer[..]);
-
-                                            if let Ok(_) = Hdlc::encode(output.as_slice(), &mut hdlc_output) {
-                                                let _ = stream.write_all(hdlc_output.as_slice()).await;
-                                                let _ = stream.flush().await;
+                                            Err(e) => {
+                                                log::warn!("tcp_client: connection error {}", e);
+                                                break;
                                             }
                                         }
+                                    },
+                            };
+                        }
+                    })
+                };
+
+                let tx_task = {
+                    let cancel = cancel.clone();
+                    let tx_channel = tx_channel.clone();
+                    let mut stream = write_stream;
+
+                    tokio::spawn(async move {
+                        loop {
+                            let mut hdlc_tx_buffer = [0u8; BUFFER_SIZE];
+
+                            let mut tx_buffer = [0u8; BUFFER_SIZE];
+                            let mut tx_channel = tx_channel.lock().await;
+
+                            tokio::select! {
+                                _ = cancel.cancelled() => {
+                                        break;
+                                }
+                                Some(packet) = tx_channel.recv() => {
+                                    let mut output = OutputBuffer::new(&mut tx_buffer);
+                                    if let Ok(_) = packet.serialize(&mut output) {
+
+                                        let mut hdlc_output = OutputBuffer::new(&mut hdlc_tx_buffer[..]);
+
+                                        if let Ok(_) = Hdlc::encode(output.as_slice(), &mut hdlc_output) {
+                                            let _ = stream.write_all(hdlc_output.as_slice()).await;
+                                            let _ = stream.flush().await;
+                                        }
                                     }
-                                };
-                            }
-                        })
-                    };
+                                }
+                            };
+                        }
+                    })
+                };
 
-                    tx_task.await.unwrap();
-                    rx_task.await.unwrap();
+                tx_task.await.unwrap();
+                rx_task.await.unwrap();
 
-                    log::info!("tcp_client: disconnected from <{}>", config.addr);
-                }
-            },
-        )
+                log::info!("tcp_client: disconnected from <{}>", config.addr);
+            }
+        })
     }
 }

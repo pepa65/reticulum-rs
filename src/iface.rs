@@ -5,51 +5,40 @@ pub mod tcp;
 use std::sync::Arc;
 use std::sync::Mutex;
 
-use tokio::sync::broadcast;
+use tokio::sync::mpsc;
 use tokio::task;
 use tokio_util::sync::CancellationToken;
 
-use crate::error::RnsError;
 use crate::packet::Packet;
 
-const PACKET_TRACE_ENABLED: bool = true;
+pub type InterfaceTxSender = mpsc::Sender<Packet>;
+pub type InterfaceTxReceiver = mpsc::Receiver<Packet>;
+pub type InterfaceRxSender = mpsc::Sender<Packet>;
+pub type InterfaceRxReceiver = mpsc::Receiver<Packet>;
 
-pub struct PacketChannel {
-    in_tx: broadcast::Sender<Packet>,
-    out_rx: broadcast::Receiver<Packet>,
+pub struct InterfaceChannel {
+    pub rx_channel: InterfaceRxSender,
+    pub tx_channel: InterfaceTxReceiver,
 }
 
-impl PacketChannel {
-    pub fn new(in_tx: broadcast::Sender<Packet>, out_rx: broadcast::Receiver<Packet>) -> Self {
-        Self { in_tx, out_rx }
+impl InterfaceChannel {
+    pub fn make_rx_channel(cap: usize) -> (InterfaceRxSender, InterfaceRxReceiver) {
+        mpsc::channel(cap)
     }
 
-    pub async fn wait_for_tx(&mut self) -> Result<Packet, RnsError> {
-        let packet = self.out_rx.recv().await.map_err(|_| RnsError::PacketError);
-
-        if let Ok(packet) = packet {
-            if PACKET_TRACE_ENABLED {
-                log::debug!("packet: >> tx {}", packet.destination);
-            }
-        }
-
-        packet
+    pub fn make_tx_channel(cap: usize) -> (InterfaceTxSender, InterfaceTxReceiver) {
+        mpsc::channel(cap)
     }
 
-    pub async fn send_rx(&mut self, packet: Packet) -> Result<usize, RnsError> {
-        if PACKET_TRACE_ENABLED {
-            log::debug!("packet: << rx {}", packet.destination);
-        }
-        self.in_tx.send(packet).map_err(|_| RnsError::PacketError)
-    }
-}
-
-impl Clone for PacketChannel {
-    fn clone(&self) -> Self {
+    pub fn new(rx_channel: InterfaceRxSender, tx_channel: InterfaceTxReceiver) -> Self {
         Self {
-            in_tx: self.in_tx.clone(),
-            out_rx: self.out_rx.resubscribe(),
+            rx_channel,
+            tx_channel,
         }
+    }
+
+    pub fn split(self) -> (InterfaceRxSender, InterfaceTxReceiver) {
+        (self.rx_channel, self.tx_channel)
     }
 }
 
@@ -60,9 +49,9 @@ pub struct Interface<T> {
 }
 
 impl<T> Interface<T> {
-    pub fn new<F, R>(handler: T, channel: PacketChannel, worker: F) -> Self
+    pub fn new<F, R>(handler: T, channel: InterfaceChannel, worker: F) -> Self
     where
-        F: FnOnce(PacketChannel, Arc<Mutex<T>>, CancellationToken) -> R,
+        F: FnOnce(InterfaceChannel, Arc<Mutex<T>>, CancellationToken) -> R,
         R: std::future::Future<Output = ()> + Send + 'static,
         R::Output: Send + 'static,
     {

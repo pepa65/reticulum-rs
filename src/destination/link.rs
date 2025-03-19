@@ -60,7 +60,7 @@ impl LinkPayload {
     pub fn new_from_vec(data: &Vec<u8>) -> Self {
         let mut buffer = [0u8; PACKET_MDU];
 
-        for i in 0..data.len() {
+        for i in 0..min(buffer.len(), data.len()) {
             buffer[i] = data[i];
         }
 
