@@ -261,6 +261,19 @@ impl Packet {
     }
 }
 
+impl Default for Packet {
+    fn default() -> Self {
+        Self {
+            header: Default::default(),
+            destination: AddressHash::new_empty(),
+            data: Default::default(),
+            ifac: None,
+            transport: None,
+            context: crate::packet::PacketContext::None,
+        }
+    }
+}
+
 impl fmt::Display for Packet {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "[{}", self.header)?;

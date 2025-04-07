@@ -1,6 +1,7 @@
 use alloc::sync::Arc;
 use std::collections::HashMap;
 use std::time::Duration;
+use tokio::time;
 
 use tokio::sync::Mutex;
 use tokio::sync::MutexGuard;
@@ -19,19 +20,17 @@ use crate::destination::SingleInputDestination;
 use crate::destination::SingleOutputDestination;
 use crate::hash::AddressHash;
 use crate::identity::PrivateIdentity;
-use crate::iface::InterfaceChannel;
+use crate::iface::InterfaceManager;
 use crate::iface::InterfaceRxReceiver;
-use crate::iface::InterfaceRxSender;
-use crate::iface::InterfaceTxSender;
+use crate::iface::TxMessage;
+use crate::iface::TxMessageType;
 use crate::packet::DestinationType;
 use crate::packet::{Packet, PacketType};
 
 const PACKET_DEBUG_ENABLED: bool = true;
-const PACKET_CHANNEL_CAP: usize = 1;
 
 struct TransportHandler {
-    tx_channels: Vec<Arc<Mutex<InterfaceTxSender>>>,
-
+    iface_manager: Arc<Mutex<InterfaceManager>>,
     out_destination_tx: broadcast::Sender<Arc<Mutex<SingleOutputDestination>>>,
 
     single_in_destinations: HashMap<AddressHash, Arc<Mutex<SingleInputDestination>>>,
@@ -44,64 +43,79 @@ struct TransportHandler {
 }
 
 pub struct Transport {
-    rx_channel: InterfaceRxSender,
-
     link_in_event_tx: broadcast::Sender<LinkEventData>,
     link_out_event_tx: broadcast::Sender<LinkEventData>,
     handler: Arc<Mutex<TransportHandler>>,
+    iface_manager: Arc<Mutex<InterfaceManager>>,
 }
 
 impl Transport {
     pub fn new() -> Self {
-        let (rx_channel_send, rx_channel_recv) =
-            InterfaceChannel::make_rx_channel(PACKET_CHANNEL_CAP);
-
         let (out_destination_tx, _) = tokio::sync::broadcast::channel(16);
         let (link_in_event_tx, _) = tokio::sync::broadcast::channel(16);
         let (link_out_event_tx, _) = tokio::sync::broadcast::channel(16);
 
+        let iface_manager = InterfaceManager::new(16);
+
+        let rx_receiver = iface_manager.receiver();
+
+        let iface_manager = Arc::new(Mutex::new(iface_manager));
+
         let handler = Arc::new(Mutex::new(TransportHandler {
+            iface_manager: iface_manager.clone(),
             single_in_destinations: HashMap::new(),
             single_out_destinations: HashMap::new(),
             out_links: HashMap::new(),
             in_links: HashMap::new(),
-            tx_channels: Vec::new(),
             out_destination_tx,
             link_in_event_tx: link_in_event_tx.clone(),
         }));
 
         {
             let handler = handler.clone();
-            tokio::spawn(manage_transport(handler, rx_channel_recv))
+            tokio::spawn(manage_transport(handler, rx_receiver))
         };
 
         Self {
-            rx_channel: rx_channel_send,
+            iface_manager,
             link_in_event_tx,
             link_out_event_tx,
             handler,
         }
     }
 
-    pub async fn channel(&mut self) -> InterfaceChannel {
-        let (tx_channel_send, tx_channel_recv) =
-            InterfaceChannel::make_tx_channel(PACKET_CHANNEL_CAP);
-
-        self.handler
-            .lock()
-            .await
-            .tx_channels
-            .push(Arc::new(Mutex::new(tx_channel_send)));
-
-        InterfaceChannel::new(self.rx_channel.clone(), tx_channel_recv)
+    pub fn iface_manager(&self) -> Arc<Mutex<InterfaceManager>> {
+        self.iface_manager.clone()
     }
 
     pub async fn recv_announces(&self) -> broadcast::Receiver<Arc<Mutex<SingleOutputDestination>>> {
         self.handler.lock().await.out_destination_tx.subscribe()
     }
 
-    pub async fn send(&self, packet: Packet) {
-        self.handler.lock().await.send(packet).await;
+    pub async fn send_packet(&self, packet: Packet) {
+        self.handler.lock().await.send_packet(packet).await;
+    }
+
+    pub async fn send_broadcast(&self, packet: Packet) {
+        self.handler
+            .lock()
+            .await
+            .send(TxMessage {
+                tx_type: TxMessageType::Broadcast,
+                packet,
+            })
+            .await;
+    }
+
+    pub async fn send_direct(&self, addr: AddressHash, packet: Packet) {
+        self.handler
+            .lock()
+            .await
+            .send(TxMessage {
+                tx_type: TxMessageType::Direct(addr),
+                packet,
+            })
+            .await;
     }
 
     pub async fn send_to_out_links(&self, destination: &AddressHash, payload: &[u8]) {
@@ -114,7 +128,7 @@ impl Transport {
             {
                 let packet = link.data_packet(payload);
                 if let Ok(packet) = packet {
-                    handler.send(packet).await;
+                    handler.send_packet(packet).await;
                     count += 1;
                 }
             }
@@ -135,7 +149,7 @@ impl Transport {
             {
                 let packet = link.data_packet(payload);
                 if let Ok(packet) = packet {
-                    handler.send(packet).await;
+                    handler.send_packet(packet).await;
                     count += 1;
                 }
             }
@@ -184,7 +198,7 @@ impl Transport {
 
         let link = Arc::new(Mutex::new(link));
 
-        self.send(packet).await;
+        self.send_packet(packet).await;
 
         self.handler
             .lock()
@@ -226,14 +240,17 @@ impl Transport {
 }
 
 impl TransportHandler {
-    async fn send(&self, packet: Packet) {
-        if PACKET_DEBUG_ENABLED {
-            log::debug!("tp: >> tx {}", packet);
-        }
+    async fn send_packet(&self, packet: Packet) {
+        let message = TxMessage {
+            tx_type: TxMessageType::Broadcast,
+            packet,
+        };
 
-        for tx_channel in &self.tx_channels {
-            let _ = tx_channel.lock().await.send(packet).await;
-        }
+        self.send(message).await;
+    }
+
+    async fn send(&self, message: TxMessage) {
+        self.iface_manager.lock().await.send(message).await;
     }
 }
 
@@ -245,7 +262,7 @@ async fn handle_proof<'a>(packet: &Packet, handler: MutexGuard<'a, TransportHand
         match link.handle_packet(packet) {
             LinkHandleResult::Activated => {
                 let rtt_packet = link.create_rtt();
-                handler.send(rtt_packet).await;
+                handler.send_packet(rtt_packet).await;
             }
             _ => {}
         }
@@ -267,7 +284,7 @@ async fn handle_data<'a>(packet: &Packet, handler: MutexGuard<'a, TransportHandl
             match result {
                 LinkHandleResult::KeepAlive => {
                     let packet = link.keep_alive_packet(0xFE);
-                    handler.send(packet).await;
+                    handler.send_packet(packet).await;
                 }
                 _ => {}
             }
@@ -331,7 +348,7 @@ async fn handle_link_request<'a>(packet: &Packet, mut handler: MutexGuard<'a, Tr
                 );
 
                 if let Ok(mut link) = link {
-                    handler.send(link.prove()).await;
+                    handler.send_packet(link.prove()).await;
 
                     log::debug!(
                         "tp: save input link {} for destination {}",
@@ -384,7 +401,7 @@ async fn handle_check_links<'a>(mut handler: MutexGuard<'a, TransportHandler>) {
         if link.status() == LinkStatus::Pending {
             if link.elapsed() > Duration::from_secs(5) {
                 log::warn!("tp: repeat link request {}", link.id());
-                handler.send(link.request()).await;
+                handler.send_packet(link.request()).await;
             }
         }
     }
@@ -395,14 +412,18 @@ async fn handle_keep_links<'a>(handler: MutexGuard<'a, TransportHandler>) {
         let link = link.lock().await;
 
         if link.status() == LinkStatus::Active {
-            handler.send(link.keep_alive_packet(0xFF)).await;
+            handler.send_packet(link.keep_alive_packet(0xFF)).await;
         }
     }
 }
 
+async fn handle_cleanup<'a>(handler: MutexGuard<'a, TransportHandler>) {
+    handler.iface_manager.lock().await.cleanup();
+}
+
 async fn manage_transport(
     handler: Arc<Mutex<TransportHandler>>,
-    mut rx_channel: InterfaceRxReceiver,
+    rx_receiver: Arc<Mutex<InterfaceRxReceiver>>,
 ) {
     let _packet_task = {
         let handler = handler.clone();
@@ -411,11 +432,14 @@ async fn manage_transport(
 
         tokio::spawn(async move {
             loop {
+                let mut rx_receiver = rx_receiver.lock().await;
+
                 tokio::select! {
-                    Some(packet) = rx_channel.recv() => {
+                    Some(message) = rx_receiver.recv() => {
+                        let packet = message.packet;
 
                         if PACKET_DEBUG_ENABLED {
-                            log::debug!("tp: << rx {}", packet);
+                            log::debug!("tp: << rx({}) = {}", message.address, packet);
                         }
 
                         let handler = handler.lock().await;
@@ -432,13 +456,36 @@ async fn manage_transport(
         })
     };
 
-    let mut link_check_interval = tokio::time::interval(Duration::from_secs(10));
-    let mut link_keep_interval = tokio::time::interval(Duration::from_secs(5));
+    {
+        let handler = handler.clone();
 
-    loop {
-        tokio::select! {
-            _ = link_check_interval.tick() => handle_check_links(handler.lock().await).await,
-            _ = link_keep_interval.tick() => handle_keep_links(handler.lock().await).await,
-        }
+        tokio::spawn(async move {
+            loop {
+                time::sleep(Duration::from_secs(5)).await;
+                handle_check_links(handler.lock().await).await;
+            }
+        });
+    }
+
+    {
+        let handler = handler.clone();
+
+        tokio::spawn(async move {
+            loop {
+                time::sleep(Duration::from_secs(10)).await;
+                handle_keep_links(handler.lock().await).await;
+            }
+        });
+    }
+
+    {
+        let handler = handler.clone();
+
+        tokio::spawn(async move {
+            loop {
+                time::sleep(Duration::from_secs(30)).await;
+                handle_cleanup(handler.lock().await).await;
+            }
+        });
     }
 }

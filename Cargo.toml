@@ -44,8 +44,12 @@ alloc = []
 tonic-build = "0.12.3"
 
 [[example]]
-name = "tcp_app"
-path = "examples/tcp_app.rs"
+name = "tcp-server"
+path = "examples/tcp_server.rs"
+
+[[example]]
+name = "tcp-client"
+path = "examples/tcp_client.rs"
 
 [[example]]
 name = "link-client"

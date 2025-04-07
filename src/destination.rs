@@ -249,11 +249,11 @@ impl Destination<PrivateIdentity, Input, Single> {
         let verifying_key = self.identity.as_identity().verifying_key_bytes();
 
         packet_data
-            .chain_write(self.desc.address_hash.as_slice())?
-            .chain_write(pub_key)?
-            .chain_write(verifying_key)?
-            .chain_write(self.desc.name.as_name_hash_slice())?
-            .chain_write(rand_hash)?;
+            .chain_safe_write(self.desc.address_hash.as_slice())
+            .chain_safe_write(pub_key)
+            .chain_safe_write(verifying_key)
+            .chain_safe_write(self.desc.name.as_name_hash_slice())
+            .chain_safe_write(rand_hash);
 
         if let Some(data) = app_data {
             packet_data.write(data)?;
@@ -264,11 +264,11 @@ impl Destination<PrivateIdentity, Input, Single> {
         packet_data.reset();
 
         packet_data
-            .chain_write(pub_key)?
-            .chain_write(verifying_key)?
-            .chain_write(self.desc.name.as_name_hash_slice())?
-            .chain_write(rand_hash)?
-            .chain_write(&signature.to_bytes())?;
+            .chain_safe_write(pub_key)
+            .chain_safe_write(verifying_key)
+            .chain_safe_write(self.desc.name.as_name_hash_slice())
+            .chain_safe_write(rand_hash)
+            .chain_safe_write(&signature.to_bytes());
 
         if let Some(data) = app_data {
             packet_data.write(data)?;

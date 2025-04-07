@@ -1,5 +1,5 @@
-use core::fmt;
 use core::cmp::min;
+use core::fmt;
 
 use crate::error::RnsError;
 
@@ -54,6 +54,11 @@ impl<const N: usize> StaticBuffer<N> {
         self.write(&data[..max_size]).unwrap_or(0)
     }
 
+    pub fn chain_safe_write(&mut self, data: &[u8]) -> &mut Self {
+        self.safe_write(data);
+        self
+    }
+
     pub fn write(&mut self, data: &[u8]) -> Result<usize, RnsError> {
         let data_size = data.len();
 
@@ -100,6 +105,15 @@ impl<const N: usize> StaticBuffer<N> {
     pub fn accuire_buf_max(&mut self) -> &mut [u8] {
         self.len = self.buffer.len();
         &mut self.buffer[..self.len]
+    }
+}
+
+impl<const N: usize> Default for StaticBuffer<N> {
+    fn default() -> Self {
+        Self {
+            buffer: [0u8; N],
+            len: 0,
+        }
     }
 }
 

@@ -14,7 +14,7 @@ use tonic::transport::Channel;
 
 use crate::buffer::{InputBuffer, OutputBuffer};
 use crate::error::RnsError;
-use crate::iface::{Interface, InterfaceChannel};
+use crate::iface::{Interface, InterfaceContext, RxMessage};
 use crate::packet::Packet;
 use crate::serde::Serialize;
 
@@ -22,106 +22,87 @@ use alloc::string::String;
 
 use super::RadioModule;
 
-const PACKET_DEBUG_ENABLED: bool = true;
-
-#[derive(Clone)]
-pub struct KaonicGrpcConfig {
+pub struct KaonicGrpc {
     pub addr: String,
     pub module: RadioModule,
 }
 
-pub struct KaonicGrpc {
-    config: KaonicGrpcConfig,
-}
+impl KaonicGrpc {
+    pub async fn spawn(context: InterfaceContext<Self>) {
+        let addr = { context.inner.lock().unwrap().addr.clone() };
+        let module = { context.inner.lock().unwrap().module };
 
-pub type KaonicGrpcInterface = Interface<KaonicGrpc>;
+        let iface_address = context.channel.address;
 
-impl KaonicGrpcInterface {
-    pub fn start(config: KaonicGrpcConfig, channel: InterfaceChannel) -> Self {
-        log::debug!("kaonic_grpc: start new iface <{}>", config.addr);
+        let (rx_channel, tx_channel) = context.channel.split();
 
-        let handler = KaonicGrpc { config };
+        let tx_channel = Arc::new(tokio::sync::Mutex::new(tx_channel));
 
-        Interface::<KaonicGrpc>::new(handler, channel, |channel, handler, cancel| async move {
-            let config = { handler.lock().unwrap().config.clone() };
+        loop {
+            if context.cancel.is_cancelled() {
+                break;
+            }
 
-            let (rx_channel, tx_channel) = channel.split();
+            let grpc_channel = Channel::from_shared(addr.to_string())
+                .unwrap()
+                .connect_timeout(Duration::from_secs(30))
+                .connect()
+                .await;
 
-            let rx_channel = Arc::new(rx_channel);
-            let tx_channel = Arc::new(tokio::sync::Mutex::new(tx_channel));
+            if let Err(err) = grpc_channel {
+                log::warn!("kaonic_grpc: couldn't connect to <{}> = '{}'", addr, err);
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                continue;
+            }
 
-            loop {
-                if cancel.is_cancelled() {
-                    break;
-                }
+            let grpc_channel = grpc_channel.unwrap();
 
-                let grpc_channel = Channel::from_shared(config.addr.to_string())
-                    .unwrap()
-                    .connect_timeout(Duration::from_secs(30))
-                    .connect()
-                    .await;
+            let mut radio_client = RadioClient::new(grpc_channel.clone());
+            let mut _device_client = DeviceClient::new(grpc_channel.clone());
 
-                if let Err(err) = grpc_channel {
-                    log::warn!(
-                        "kaonic_grpc: couldn't connect to <{}> = '{}'",
-                        config.addr,
-                        err
-                    );
-                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-                    continue;
-                }
+            let mut recv_stream = radio_client
+                .receive_stream(proto::ReceiveRequest {
+                    module: module as u32,
+                    timeout: 0,
+                })
+                .await
+                .unwrap()
+                .into_inner();
 
-                let grpc_channel = grpc_channel.unwrap();
+            log::info!("kaonic_grpc: connected to <{}>", addr);
 
-                let mut radio_client = RadioClient::new(grpc_channel.clone());
-                let mut _device_client = DeviceClient::new(grpc_channel.clone());
+            const BUFFER_SIZE: usize = std::mem::size_of::<Packet>() * 2;
 
-                let mut recv_stream = radio_client
-                    .receive_stream(proto::ReceiveRequest {
-                        module: config.module as u32,
-                        timeout: 0,
-                    })
-                    .await
-                    .unwrap()
-                    .into_inner();
+            let cancel = context.cancel.clone();
+            let stop = CancellationToken::new();
 
-                log::info!("kaonic_grpc: connected to <{}>", config.addr);
+            let rx_task = {
+                let cancel = cancel.clone();
+                let stop = stop.clone();
+                let rx_channel = rx_channel.clone();
 
-                const BUFFER_SIZE: usize = std::mem::size_of::<Packet>() * 2;
+                tokio::spawn(async move {
+                    let mut rx_buffer = [0u8; BUFFER_SIZE];
 
-                let stop = CancellationToken::new();
+                    log::trace!("kaonic_grpc: start rx task");
 
-                let rx_task = {
-                    let cancel = cancel.clone();
-                    let stop = stop.clone();
-                    let rx_channel = rx_channel.clone();
-
-                    tokio::spawn(async move {
-                        let mut rx_buffer = [0u8; BUFFER_SIZE];
-
-                        log::trace!("kaonic_grpc: start rx task");
-
-                        loop {
-                            tokio::select! {
-                                _ = cancel.cancelled() => {
-                                        break;
-                                }
-                                _ = stop.cancelled() => {
-                                        break;
-                                }
-                                Some(result) = recv_stream.next() => {
-                                    if let Ok(response) = result {
-                                        if let Some(frame) = response.frame {
-                                            if frame.length > 0 {
-                                                if let Ok(buf) = decode_frame_to_buffer(&frame, &mut rx_buffer[..]) {
-                                                    if let Ok(packet) = Packet::deserialize(&mut InputBuffer::new(buf)) {
-                                                            if PACKET_DEBUG_ENABLED {
-                                                                log::debug!("kaonic_grpc: rx packet {}", packet.destination);
-                                                            }
-                                                            let _ = rx_channel.send(packet).await;
-                                                    } else {
-                                                        log::warn!("kaonic_grpc: couldn't decode packet");
-                                                    }
+                    loop {
+                        tokio::select! {
+                            _ = cancel.cancelled() => {
+                                    break;
+                            }
+                            _ = stop.cancelled() => {
+                                    break;
+                            }
+                            Some(result) = recv_stream.next() => {
+                                if let Ok(response) = result {
+                                    if let Some(frame) = response.frame {
+                                        if frame.length > 0 {
+                                            if let Ok(buf) = decode_frame_to_buffer(&frame, &mut rx_buffer[..]) {
+                                                if let Ok(packet) = Packet::deserialize(&mut InputBuffer::new(buf)) {
+                                                        let _ = rx_channel.send(RxMessage { address: iface_address, packet }).await;
+                                                } else {
+                                                    log::warn!("kaonic_grpc: couldn't decode packet");
                                                 }
                                             }
                                         }
@@ -129,64 +110,62 @@ impl KaonicGrpcInterface {
                                 }
                             }
                         }
+                    }
 
-                        stop.cancel();
-                    })
-                };
+                    stop.cancel();
+                })
+            };
 
-                let tx_task = {
-                    let cancel = cancel.clone();
-                    let stop = stop.clone();
-                    let tx_channel = tx_channel.clone();
+            let tx_task = {
+                let cancel = cancel.clone();
+                let stop = stop.clone();
+                let tx_channel = tx_channel.clone();
 
-                    tokio::spawn(async move {
-                        let mut tx_buffer = [0u8; BUFFER_SIZE];
-                        log::trace!("kaonic_grpc: start tx task");
-                        loop {
-                            let mut tx_channel = tx_channel.lock().await;
+                tokio::spawn(async move {
+                    let mut tx_buffer = [0u8; BUFFER_SIZE];
+                    log::trace!("kaonic_grpc: start tx task");
+                    loop {
+                        let mut tx_channel = tx_channel.lock().await;
 
-                            tokio::select! {
-                                _ = cancel.cancelled() => {
-                                        break;
-                                },
-                                _ = stop.cancelled() => {
-                                        break;
-                                },
-                                Some(packet) = tx_channel.recv() => {
-                                    if PACKET_DEBUG_ENABLED {
-                                        log::debug!("kaonic_grpc: tx packet {}", packet.destination);
-                                    }
-                                    let mut output = OutputBuffer::new(&mut tx_buffer);
-                                    if let Ok(_) = packet.serialize(&mut output) {
+                        tokio::select! {
+                            _ = cancel.cancelled() => {
+                                    break;
+                            },
+                            _ = stop.cancelled() => {
+                                    break;
+                            },
+                            Some(message) = tx_channel.recv() => {
+                                let packet = message.packet;
+                                let mut output = OutputBuffer::new(&mut tx_buffer);
+                                if let Ok(_) = packet.serialize(&mut output) {
 
-                                        let frame = encode_buffer_to_frame(output.as_mut_slice());
+                                    let frame = encode_buffer_to_frame(output.as_mut_slice());
 
-                                        let result = radio_client.transmit(proto::TransmitRequest{
-                                            module: config.module as u32,
-                                            frame: Some(frame),
-                                        }).await;
+                                    let result = radio_client.transmit(proto::TransmitRequest{
+                                        module: module as u32,
+                                        frame: Some(frame),
+                                    }).await;
 
-                                        if let Err(err) = result {
-                                            log::warn!("kaonic_grpc: tx err = '{}'", err);
-                                            if err.code() == tonic::Code::Unknown || err.code() == tonic::Code::Unavailable {
-                                                break;
-                                            }
+                                    if let Err(err) = result {
+                                        log::warn!("kaonic_grpc: tx err = '{}'", err);
+                                        if err.code() == tonic::Code::Unknown || err.code() == tonic::Code::Unavailable {
+                                            break;
                                         }
                                     }
                                 }
-                            };
-                        }
+                            }
+                        };
+                    }
 
-                        stop.cancel();
-                    })
-                };
+                    stop.cancel();
+                })
+            };
 
-                tx_task.await.unwrap();
-                rx_task.await.unwrap();
+            tx_task.await.unwrap();
+            rx_task.await.unwrap();
 
-                log::info!("kaonic_grpc: disconnected from <{}>", config.addr);
-            }
-        })
+            log::info!("kaonic_grpc: disconnected from <{}>", addr);
+        }
     }
 }
 
@@ -240,4 +219,10 @@ fn decode_frame_to_buffer<'a>(
     }
 
     Ok(&buffer[..length])
+}
+
+impl Interface for KaonicGrpc {
+    fn mtu() -> usize {
+        2048
+    }
 }
