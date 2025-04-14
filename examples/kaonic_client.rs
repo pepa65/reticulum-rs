@@ -5,7 +5,7 @@ use std::time::Duration;
 use rand_core::OsRng;
 use reticulum::destination::DestinationName;
 use reticulum::identity::PrivateIdentity;
-use reticulum::iface::kaonic::kaonic_grpc::{KaonicGrpcConfig, KaonicGrpcInterface};
+use reticulum::iface::kaonic::kaonic_grpc::KaonicGrpc;
 use reticulum::iface::kaonic::RadioModule;
 use reticulum::transport::Transport;
 use tokio::sync::Mutex;
@@ -27,12 +27,9 @@ async fn main() {
 
     log::info!("start kaonic client");
 
-    let _kaonic_client = KaonicGrpcInterface::start(
-        KaonicGrpcConfig {
-            addr: format!("http://{}", grpc_addr).into(),
-            module: RadioModule::RadioA,
-        },
-        transport.lock().await.channel().await,
+    let _ = transport.lock().await.iface_manager().lock().await.spawn(
+        KaonicGrpc::new(format!("http://{}", grpc_addr), RadioModule::RadioA),
+        KaonicGrpc::spawn,
     );
 
     let identity = PrivateIdentity::new_from_name("kaonic-example");
@@ -53,10 +50,10 @@ async fn main() {
             loop {
                 log::trace!("announce");
 
-                transport
+                let _ = transport
                     .lock()
                     .await
-                    .send(in_destination.lock().await.announce(OsRng, None).unwrap())
+                    .send_packet(in_destination.lock().await.announce(OsRng, None).unwrap())
                     .await;
 
                 tokio::time::sleep(Duration::from_secs(3)).await;

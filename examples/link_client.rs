@@ -1,8 +1,8 @@
 use rand_core::OsRng;
 
-use reticulum::destination::{DestinationAnnounce, DestinationName};
+use reticulum::destination::DestinationName;
 use reticulum::identity::PrivateIdentity;
-use reticulum::iface::tcp_client::{TcpClient, TcpClientConfig, TcpClientInterface};
+use reticulum::iface::tcp_client::TcpClient;
 use reticulum::transport::Transport;
 
 #[tokio::main]
@@ -31,7 +31,7 @@ async fn main() {
         .await;
 
     transport
-        .send(in_destination.lock().await.announce(OsRng, None).unwrap())
+        .send_packet(in_destination.lock().await.announce(OsRng, None).unwrap())
         .await;
 
     // let mut recv = transport.recv();

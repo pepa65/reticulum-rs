@@ -28,6 +28,13 @@ pub struct KaonicGrpc {
 }
 
 impl KaonicGrpc {
+    pub fn new<T: Into<String>>(addr: T, module: RadioModule) -> Self {
+        Self {
+            addr: addr.into(),
+            module,
+        }
+    }
+
     pub async fn spawn(context: InterfaceContext<Self>) {
         let addr = { context.inner.lock().unwrap().addr.clone() };
         let module = { context.inner.lock().unwrap().module };

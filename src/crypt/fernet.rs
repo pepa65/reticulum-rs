@@ -213,7 +213,7 @@ mod tests {
     fn encrypt_then_decrypt() {
         const BUF_SIZE: usize = 4096;
 
-        let mut fernet = Fernet::new_rand(OsRng);
+        let fernet = Fernet::new_rand(OsRng);
 
         let out_msg: &str = "#FERNET_TEST_MESSAGE#";
 
@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn small_buffer() {
-        let mut fernet = Fernet::new_rand(OsRng);
+        let fernet = Fernet::new_rand(OsRng);
 
         let test_msg: &str = "#FERNET_TEST_MESSAGE#";
 
