@@ -1,7 +1,9 @@
 use alloc::sync::Arc;
+use rand_core::OsRng;
 use std::collections::HashMap;
 use std::time::Duration;
 use tokio::time;
+use tokio_util::sync::CancellationToken;
 
 use tokio::sync::Mutex;
 use tokio::sync::MutexGuard;
@@ -27,9 +29,16 @@ use crate::iface::TxMessageType;
 use crate::packet::DestinationType;
 use crate::packet::{Packet, PacketType};
 
-const PACKET_DEBUG_ENABLED: bool = true;
+// TODO: Configure via features
+const PACKET_TRACE: bool = true;
+
+pub struct TransportConfig {
+    name: String,
+    broadcast: bool,
+}
 
 struct TransportHandler {
+    _config: TransportConfig,
     iface_manager: Arc<Mutex<InterfaceManager>>,
     out_destination_tx: broadcast::Sender<Arc<Mutex<SingleOutputDestination>>>,
 
@@ -40,6 +49,8 @@ struct TransportHandler {
     in_links: HashMap<AddressHash, Arc<Mutex<Link>>>,
 
     link_in_event_tx: broadcast::Sender<LinkEventData>,
+
+    cancel: CancellationToken,
 }
 
 pub struct Transport {
@@ -47,10 +58,29 @@ pub struct Transport {
     link_out_event_tx: broadcast::Sender<LinkEventData>,
     handler: Arc<Mutex<TransportHandler>>,
     iface_manager: Arc<Mutex<InterfaceManager>>,
+    cancel: CancellationToken,
+}
+
+impl TransportConfig {
+    pub fn new<T: Into<String>>(name: T, broadcast: bool) -> Self {
+        Self {
+            name: name.into(),
+            broadcast,
+        }
+    }
+}
+
+impl Default for TransportConfig {
+    fn default() -> Self {
+        Self {
+            name: "tp".into(),
+            broadcast: false,
+        }
+    }
 }
 
 impl Transport {
-    pub fn new() -> Self {
+    pub fn new(config: TransportConfig) -> Self {
         let (out_destination_tx, _) = tokio::sync::broadcast::channel(16);
         let (link_in_event_tx, _) = tokio::sync::broadcast::channel(16);
         let (link_out_event_tx, _) = tokio::sync::broadcast::channel(16);
@@ -61,7 +91,10 @@ impl Transport {
 
         let iface_manager = Arc::new(Mutex::new(iface_manager));
 
+        let cancel = CancellationToken::new();
+
         let handler = Arc::new(Mutex::new(TransportHandler {
+            _config: config,
             iface_manager: iface_manager.clone(),
             single_in_destinations: HashMap::new(),
             single_out_destinations: HashMap::new(),
@@ -69,6 +102,7 @@ impl Transport {
             in_links: HashMap::new(),
             out_destination_tx,
             link_in_event_tx: link_in_event_tx.clone(),
+            cancel: cancel.clone(),
         }));
 
         {
@@ -81,6 +115,7 @@ impl Transport {
             link_in_event_tx,
             link_out_event_tx,
             handler,
+            cancel,
         }
     }
 
@@ -94,6 +129,24 @@ impl Transport {
 
     pub async fn send_packet(&self, packet: Packet) {
         self.handler.lock().await.send_packet(packet).await;
+    }
+
+    pub async fn send_announce(
+        &self,
+        destination: &Arc<Mutex<SingleInputDestination>>,
+        app_data: Option<&[u8]>,
+    ) {
+        self.handler
+            .lock()
+            .await
+            .send_packet(
+                destination
+                    .lock()
+                    .await
+                    .announce(OsRng, app_data)
+                    .expect("valid announce packet"),
+            )
+            .await;
     }
 
     pub async fn send_broadcast(&self, packet: Packet) {
@@ -236,6 +289,12 @@ impl Transport {
             .insert(address_hash, destination.clone());
 
         destination
+    }
+}
+
+impl Drop for Transport {
+    fn drop(&mut self) {
+        self.cancel.cancel();
     }
 }
 
@@ -425,8 +484,11 @@ async fn manage_transport(
     handler: Arc<Mutex<TransportHandler>>,
     rx_receiver: Arc<Mutex<InterfaceRxReceiver>>,
 ) {
+    let cancel = handler.lock().await.cancel.clone();
+
     let _packet_task = {
         let handler = handler.clone();
+        let cancel = cancel.clone();
 
         log::trace!("tp: start packet task");
 
@@ -434,12 +496,19 @@ async fn manage_transport(
             loop {
                 let mut rx_receiver = rx_receiver.lock().await;
 
+                if cancel.is_cancelled() {
+                    break;
+                }
+
                 tokio::select! {
+                    _ = cancel.cancelled() => {
+                        break;
+                    },
                     Some(message) = rx_receiver.recv() => {
                         let packet = message.packet;
 
-                        if PACKET_DEBUG_ENABLED {
-                            log::debug!("tp: << rx({}) = {}", message.address, packet);
+                        if PACKET_TRACE {
+                            log::trace!("tp: << rx({}) = {}", message.address, packet);
                         }
 
                         let handler = handler.lock().await;
@@ -458,33 +527,66 @@ async fn manage_transport(
 
     {
         let handler = handler.clone();
+        let cancel = cancel.clone();
 
         tokio::spawn(async move {
             loop {
-                time::sleep(Duration::from_secs(5)).await;
-                handle_check_links(handler.lock().await).await;
+                if cancel.is_cancelled() {
+                    break;
+                }
+
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        break;
+                    },
+                    _ = time::sleep(Duration::from_secs(5)) => {
+                        handle_check_links(handler.lock().await).await;
+                    }
+                }
             }
         });
     }
 
     {
         let handler = handler.clone();
+        let cancel = cancel.clone();
 
         tokio::spawn(async move {
             loop {
-                time::sleep(Duration::from_secs(10)).await;
-                handle_keep_links(handler.lock().await).await;
+                if cancel.is_cancelled() {
+                    break;
+                }
+
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        break;
+                    },
+                    _ = time::sleep(Duration::from_secs(10)) => {
+                        handle_keep_links(handler.lock().await).await;
+                    }
+                }
             }
         });
     }
 
     {
         let handler = handler.clone();
+        let cancel = cancel.clone();
 
         tokio::spawn(async move {
             loop {
-                time::sleep(Duration::from_secs(30)).await;
-                handle_cleanup(handler.lock().await).await;
+                if cancel.is_cancelled() {
+                    break;
+                }
+
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        break;
+                    },
+                    _ = time::sleep(Duration::from_secs(30)) => {
+                        handle_cleanup(handler.lock().await).await;
+                    }
+                }
             }
         });
     }

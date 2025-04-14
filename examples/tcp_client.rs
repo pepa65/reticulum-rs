@@ -4,7 +4,7 @@ use rand_core::OsRng;
 use reticulum::destination::{DestinationName, SingleInputDestination};
 use reticulum::identity::PrivateIdentity;
 use reticulum::iface::tcp_client::TcpClient;
-use reticulum::transport::Transport;
+use reticulum::transport::{Transport, TransportConfig};
 
 #[tokio::main]
 async fn main() {
@@ -12,7 +12,7 @@ async fn main() {
 
     log::info!(">>> TCP CLIENT APP <<<");
 
-    let transport = Transport::new();
+    let transport = Transport::new(TransportConfig::default());
 
     let client_addr = transport
         .iface_manager()

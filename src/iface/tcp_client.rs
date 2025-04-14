@@ -17,6 +17,9 @@ use alloc::string::String;
 use super::hdlc::Hdlc;
 use super::{Interface, InterfaceContext};
 
+// TODO: Configure via features
+const PACKET_TRACE: bool = true;
+
 pub struct TcpClient {
     addr: String,
     stream: Option<TcpStream>,
@@ -110,6 +113,9 @@ impl TcpClient {
                                             let mut output = OutputBuffer::new(&mut hdlc_rx_buffer[..]);
                                             if let Ok(_) = Hdlc::decode(&rx_buffer[..n], &mut output) {
                                                 if let Ok(packet) = Packet::deserialize(&mut InputBuffer::new(output.as_slice())) {
+                                                    if PACKET_TRACE {
+                                                        log::trace!("tcp_client: rx << ({}) {}", iface_address, packet);
+                                                    }
                                                     let _ = rx_channel.send(RxMessage { address: iface_address, packet }).await;
                                                 } else {
                                                     log::warn!("tcp_client: couldn't decode packet");
@@ -155,6 +161,9 @@ impl TcpClient {
                             }
                             Some(message) = tx_channel.recv() => {
                                 let packet = message.packet;
+                                if PACKET_TRACE {
+                                    log::trace!("tcp_client: tx >> ({}) {}", iface_address, packet);
+                                }
                                 let mut output = OutputBuffer::new(&mut tx_buffer);
                                 if let Ok(_) = packet.serialize(&mut output) {
 

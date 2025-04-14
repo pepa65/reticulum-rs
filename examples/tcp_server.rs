@@ -1,5 +1,5 @@
 use reticulum::iface::tcp_server::TcpServer;
-use reticulum::transport::Transport;
+use reticulum::transport::{Transport, TransportConfig};
 
 #[tokio::main]
 async fn main() {
@@ -7,7 +7,7 @@ async fn main() {
 
     log::info!(">>> TCP SERVER APP <<<");
 
-    let transport = Transport::new();
+    let transport = Transport::new(TransportConfig::default());
 
     let _ = transport.iface_manager().lock().await.spawn(
         TcpServer::new("127.0.0.1:4242", transport.iface_manager()),

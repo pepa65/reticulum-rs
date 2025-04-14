@@ -7,7 +7,7 @@ use reticulum::destination::DestinationName;
 use reticulum::identity::PrivateIdentity;
 use reticulum::iface::kaonic::kaonic_grpc::KaonicGrpc;
 use reticulum::iface::kaonic::RadioModule;
-use reticulum::transport::Transport;
+use reticulum::transport::{Transport, TransportConfig};
 use tokio::sync::Mutex;
 
 #[tokio::main]
@@ -23,7 +23,7 @@ async fn main() {
 
     let grpc_addr = &args[1];
 
-    let transport = Arc::new(Mutex::new(Transport::new()));
+    let transport = Arc::new(Mutex::new(Transport::new(TransportConfig::default())));
 
     log::info!("start kaonic client");
 

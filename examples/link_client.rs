@@ -3,13 +3,13 @@ use rand_core::OsRng;
 use reticulum::destination::DestinationName;
 use reticulum::identity::PrivateIdentity;
 use reticulum::iface::tcp_client::TcpClient;
-use reticulum::transport::Transport;
+use reticulum::transport::{Transport, TransportConfig};
 
 #[tokio::main]
 async fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace")).init();
 
-    let mut transport = Transport::new();
+    let mut transport = Transport::new(TransportConfig::default());
 
     log::info!("start tcp app");
 

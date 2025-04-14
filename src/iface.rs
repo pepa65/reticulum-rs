@@ -186,7 +186,6 @@ impl InterfaceManager {
             };
 
             if should_send && !iface.stop.is_cancelled() {
-                log::debug!("iface: send to {}", iface.address);
                 let _ = iface.tx_send.send(message.clone()).await;
             }
         }
