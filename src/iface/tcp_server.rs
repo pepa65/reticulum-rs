@@ -29,6 +29,9 @@ impl TcpServer {
 
         let iface_manager = { context.inner.lock().unwrap().iface_manager.clone() };
 
+        let (_, tx_channel) = context.channel.split();
+        let tx_channel = Arc::new(tokio::sync::Mutex::new(tx_channel));
+
         loop {
             if context.cancel.is_cancelled() {
                 break;
@@ -47,19 +50,62 @@ impl TcpServer {
             log::info!("tcp_server: listen on <{}>", addr);
 
             let listener = listener.unwrap();
+
+            let tx_task = {
+                let cancel = context.cancel.clone();
+                let tx_channel = tx_channel.clone();
+
+                tokio::spawn(async move {
+                    loop {
+                        if cancel.is_cancelled() {
+                            break;
+                        }
+
+                        let mut tx_channel = tx_channel.lock().await;
+
+                        tokio::select! {
+                            _ = cancel.cancelled() => {
+                                break;
+                            }
+                            // Skip all tx messages
+                            _ = tx_channel.recv() => {}
+                        }
+                    }
+                })
+            };
+
+            let cancel = context.cancel.clone();
+
             loop {
-                let client = listener.accept().await;
-                if let Ok(client) = client {
-                    log::info!("tcp_server: new client <{}> connected", client.1);
+                if cancel.is_cancelled() {
+                    break;
+                }
 
-                    let mut iface_manager = iface_manager.lock().await;
+                tokio::select! {
+                    _ = cancel.cancelled() => {
+                        break;
+                    }
 
-                    iface_manager.spawn(
-                        TcpClient::new_from_stream(client.1.to_string(), client.0),
-                        TcpClient::spawn,
-                    );
+                    client = listener.accept() => {
+                        if let Ok(client) = client {
+                            log::info!(
+                                "tcp_server: new client <{}> connected to <{}>",
+                                client.1,
+                                addr
+                            );
+
+                            let mut iface_manager = iface_manager.lock().await;
+
+                            iface_manager.spawn(
+                                TcpClient::new_from_stream(client.1.to_string(), client.0),
+                                TcpClient::spawn,
+                            );
+                        }
+                    }
                 }
             }
+
+            let _ = tokio::join!(tx_task);
         }
     }
 }
