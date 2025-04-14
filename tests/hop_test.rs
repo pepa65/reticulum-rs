@@ -8,11 +8,7 @@ use reticulum::{
 };
 use tokio::{sync::Mutex, time};
 
-async fn build_transport(
-    name: &str,
-    server_addr: &str,
-    client_addr: &[&str],
-) -> Arc<Mutex<Transport>> {
+async fn build_transport(name: &str, server_addr: &str, client_addr: &[&str]) -> Transport {
     let transport = Transport::new(TransportConfig::new(name, true));
 
     transport.iface_manager().lock().await.spawn(
@@ -30,16 +26,16 @@ async fn build_transport(
 
     log::info!("test: transport {} created", name);
 
-    Arc::new(Mutex::new(transport))
+    transport
 }
 
 #[tokio::test]
 async fn calculate_hop_distance() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace")).init();
 
-    let transport_a = build_transport("a", "127.0.0.1:8081", &[]).await;
-    let transport_b = build_transport("b", "127.0.0.1:8082", &["127.0.0.1:8081"]).await;
-    let transport_c =
+    let mut transport_a = build_transport("a", "127.0.0.1:8081", &[]).await;
+    let mut transport_b = build_transport("b", "127.0.0.1:8082", &["127.0.0.1:8081"]).await;
+    let mut transport_c =
         build_transport("c", "127.0.0.1:8083", &["127.0.0.1:8081", "127.0.0.1:8082"]).await;
 
     let id_a = PrivateIdentity::new_from_name("a");
@@ -47,26 +43,24 @@ async fn calculate_hop_distance() {
     let id_c = PrivateIdentity::new_from_name("c");
 
     let dest_a = transport_a
-        .lock()
-        .await
         .add_destination(id_a, DestinationName::new("test", "hop"))
         .await;
 
     let dest_b = transport_b
-        .lock()
-        .await
         .add_destination(id_b, DestinationName::new("test", "hop"))
         .await;
 
     let dest_c = transport_c
-        .lock()
-        .await
         .add_destination(id_c, DestinationName::new("test", "hop"))
         .await;
 
     time::sleep(Duration::from_secs(2)).await;
 
-    transport_a.lock().await.send_announce(&dest_a, None).await;
+    println!("======");
+    transport_a.send_announce(&dest_a, None).await;
+
+    transport_b.recv_announces().await;
+    transport_c.recv_announces().await;
 
     time::sleep(Duration::from_secs(2)).await;
 }
