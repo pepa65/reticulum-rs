@@ -7,7 +7,7 @@ license = "MIT"
 [dependencies]
 
 # Protobuf and gRPC
-tonic = "0.12.3"
+tonic = "0.13.0"
 prost = "0.13.5"
 
 # Crypto
@@ -26,14 +26,14 @@ sha2 = "0.10.8"
 rand_core = { version = "0.6.4", features = ["getrandom"] }
 
 # Async IO
-tokio = { version = "1", features = ["full"] }
-tokio-stream = "0.1.14"
-tokio-util = "0.7.13"
+tokio = { version = "1.44.2", features = ["full"] }
+tokio-stream = "0.1.17"
+tokio-util = "0.7.15"
 
 rmp = "0.8.14"
 
 # Logging
-log = "0.4.26"
+log = "0.4.27"
 env_logger = "0.10"
 
 [features]
@@ -41,7 +41,7 @@ default = ["alloc"]
 alloc = []
 
 [build-dependencies]
-tonic-build = "0.12.3"
+tonic-build = "0.13.0"
 
 [[example]]
 name = "tcp-server"
