@@ -69,7 +69,7 @@ impl KaonicGrpc {
 
             let mut recv_stream = radio_client
                 .receive_stream(proto::ReceiveRequest {
-                    module: module as u32,
+                    module: module as i32,
                     timeout: 0,
                 })
                 .await
@@ -149,7 +149,7 @@ impl KaonicGrpc {
                                     let frame = encode_buffer_to_frame(output.as_mut_slice());
 
                                     let result = radio_client.transmit(proto::TransmitRequest{
-                                        module: module as u32,
+                                        module: module as i32,
                                         frame: Some(frame),
                                     }).await;
 
