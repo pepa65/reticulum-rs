@@ -58,3 +58,7 @@ path = "examples/link_client.rs"
 [[example]]
 name = "kaonic-client"
 path = "examples/kaonic_client.rs"
+
+[[example]]
+name = "testnet-client"
+path = "examples/testnet_client.rs"

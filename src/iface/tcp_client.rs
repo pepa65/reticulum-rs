@@ -18,7 +18,7 @@ use super::hdlc::Hdlc;
 use super::{Interface, InterfaceContext};
 
 // TODO: Configure via features
-const PACKET_TRACE: bool = true;
+const PACKET_TRACE: bool = false;
 
 pub struct TcpClient {
     addr: String,

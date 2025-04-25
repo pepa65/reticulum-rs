@@ -34,6 +34,7 @@ const PACKET_TRACE: bool = true;
 
 pub struct TransportConfig {
     name: String,
+    identity: PrivateIdentity,
     broadcast: bool,
 }
 
@@ -62,9 +63,10 @@ pub struct Transport {
 }
 
 impl TransportConfig {
-    pub fn new<T: Into<String>>(name: T, broadcast: bool) -> Self {
+    pub fn new<T: Into<String>>(name: T, identity: &PrivateIdentity, broadcast: bool) -> Self {
         Self {
             name: name.into(),
+            identity: identity.clone(),
             broadcast,
         }
     }
@@ -74,6 +76,7 @@ impl Default for TransportConfig {
     fn default() -> Self {
         Self {
             name: "tp".into(),
+            identity: PrivateIdentity::new_from_rand(OsRng),
             broadcast: false,
         }
     }
