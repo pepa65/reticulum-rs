@@ -1,3 +1,5 @@
+use rand_core::OsRng;
+use reticulum::identity::PrivateIdentity;
 use reticulum::iface::tcp_server::TcpServer;
 use reticulum::transport::{Transport, TransportConfig};
 
@@ -7,10 +9,14 @@ async fn main() {
 
     log::info!(">>> TCP SERVER APP <<<");
 
-    let transport = Transport::new(TransportConfig::default());
+    let transport = Transport::new(TransportConfig::new(
+        "server",
+        &PrivateIdentity::new_from_rand(OsRng),
+        true,
+    ));
 
     let _ = transport.iface_manager().lock().await.spawn(
-        TcpServer::new("127.0.0.1:4242", transport.iface_manager()),
+        TcpServer::new("0.0.0.0:4242", transport.iface_manager()),
         TcpServer::spawn,
     );
 

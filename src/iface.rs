@@ -23,7 +23,7 @@ pub type InterfaceRxReceiver = mpsc::Receiver<RxMessage>;
 
 #[derive(Debug, PartialEq, Eq, Copy, Clone)]
 pub enum TxMessageType {
-    Broadcast,
+    Broadcast(Option<AddressHash>),
     Direct(AddressHash),
 }
 
@@ -181,7 +181,14 @@ impl InterfaceManager {
     pub async fn send(&self, message: TxMessage) {
         for iface in &self.ifaces {
             let should_send = match message.tx_type {
-                TxMessageType::Broadcast => true,
+                TxMessageType::Broadcast(address) => {
+                    let mut should_send = true;
+                    if let Some(address) = address {
+                        should_send = address != iface.address;
+                    }
+
+                    should_send
+                },
                 TxMessageType::Direct(address) => address == iface.address,
             };
 

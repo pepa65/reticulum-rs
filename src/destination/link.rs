@@ -254,11 +254,11 @@ impl Link {
             PacketContext::KeepAlive => {
                 if packet.data.len() >= 1 && packet.data.as_slice()[0] == 0xFF {
                     self.request_time = Instant::now();
-                    log::debug!("link: keep-alive request {}", self.id);
+                    log::trace!("link: keep-alive request {}", self.id);
                     return LinkHandleResult::KeepAlive;
                 }
                 if packet.data.len() >= 1 && packet.data.as_slice()[0] == 0xFE {
-                    log::debug!("link: keep-alive response {}", self.id);
+                    log::trace!("link: keep-alive response {}", self.id);
                     self.request_time = Instant::now();
                     return LinkHandleResult::None;
                 }
