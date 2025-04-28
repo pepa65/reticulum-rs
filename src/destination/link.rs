@@ -168,7 +168,7 @@ impl Link {
         );
 
         let link_id = LinkId::from(packet);
-        log::trace!("link: create from request {}", link_id);
+        log::debug!("link: create from request {}", link_id);
 
         let mut link = Self {
             id: link_id,
@@ -213,6 +213,13 @@ impl Link {
     }
 
     pub fn prove(&mut self) -> Packet {
+        log::debug!("link({}): prove", self.id);
+
+        if self.status != LinkStatus::Active {
+            self.status = LinkStatus::Active;
+            self.post_event(LinkEvent::Activated);
+        }
+
         let mut packet_data = PacketDataBuffer::new();
 
         packet_data.safe_write(self.id.as_slice());
@@ -241,24 +248,29 @@ impl Link {
     }
 
     fn handle_data_packet(&mut self, packet: &Packet) -> LinkHandleResult {
+        if self.status != LinkStatus::Active {
+            log::warn!("link({}): handling data packet in inactive state", self.id);
+        }
+
         match packet.context {
             PacketContext::None => {
                 let mut buffer = [0u8; PACKET_MDU];
                 if let Ok(plain_text) = self.decrypt(packet.data.as_slice(), &mut buffer[..]) {
+                    log::trace!("link({}): data {}B", self.id, plain_text.len());
                     self.request_time = Instant::now();
                     self.post_event(LinkEvent::Data(LinkPayload::new_from_slice(plain_text)));
                 } else {
-                    log::error!("link: can't decrypt packet");
+                    log::error!("link({}): can't decrypt packet", self.id);
                 }
             }
             PacketContext::KeepAlive => {
                 if packet.data.len() >= 1 && packet.data.as_slice()[0] == 0xFF {
                     self.request_time = Instant::now();
-                    log::trace!("link: keep-alive request {}", self.id);
+                    log::trace!("link({}): keep-alive request", self.id);
                     return LinkHandleResult::KeepAlive;
                 }
                 if packet.data.len() >= 1 && packet.data.as_slice()[0] == 0xFE {
-                    log::trace!("link: keep-alive response {}", self.id);
+                    log::trace!("link({}): keep-alive response", self.id);
                     self.request_time = Instant::now();
                     return LinkHandleResult::None;
                 }
@@ -282,16 +294,20 @@ impl Link {
                 {
                     if let Ok(identity) = validate_proof_packet(&self.destination, &self.id, packet)
                     {
+                        log::debug!("link({}): has been proved", self.id);
+
                         self.handshake(identity);
 
                         self.status = LinkStatus::Active;
                         self.rtt = self.request_time.elapsed();
 
+                        log::debug!("link({}): activated", self.id);
+
                         self.post_event(LinkEvent::Activated);
 
                         return LinkHandleResult::Activated;
                     } else {
-                        log::warn!("link: proof not valid");
+                        log::warn!("link({}): proof is not valid", self.id);
                     }
                 }
             }
@@ -330,6 +346,8 @@ impl Link {
     }
 
     pub fn keep_alive_packet(&self, data: u8) -> Packet {
+        log::trace!("link({}): create keep alive {}", self.id, data);
+
         let mut packet_data = PacketDataBuffer::new();
         packet_data.safe_write(&[data]);
 
@@ -396,7 +414,7 @@ impl Link {
     }
 
     fn handshake(&mut self, peer_identity: Identity) {
-        log::debug!("link: {} handshake", self.id);
+        log::debug!("link({}): handshake", self.id);
 
         self.status = LinkStatus::Handshake;
         self.peer_identity = peer_identity;
@@ -419,6 +437,12 @@ impl Link {
         self.post_event(LinkEvent::Closed);
 
         log::warn!("link: close {}", self.id);
+    }
+
+    pub fn restart(&mut self) {
+        log::warn!("link({}): restart", self.id);
+
+        self.status = LinkStatus::Pending;
     }
 
     pub fn elapsed(&self) -> Duration {
