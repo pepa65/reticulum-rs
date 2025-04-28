@@ -8,6 +8,8 @@ use std::time::Duration;
 use proto::device_client::DeviceClient;
 use proto::radio_client::RadioClient;
 use proto::RadioFrame;
+use tokio::sync::mpsc::Receiver;
+use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 use tokio_util::sync::CancellationToken;
 use tonic::transport::Channel;
@@ -20,18 +22,24 @@ use crate::serde::Serialize;
 
 use alloc::string::String;
 
-use super::RadioModule;
+use super::{RadioConfig, RadioModule};
 
 pub struct KaonicGrpc {
-    pub addr: String,
-    pub module: RadioModule,
+    addr: String,
+    module: RadioModule,
+    config_channel: Arc<Mutex<Option<Receiver<RadioConfig>>>>,
 }
 
 impl KaonicGrpc {
-    pub fn new<T: Into<String>>(addr: T, module: RadioModule) -> Self {
+    pub fn new<T: Into<String>>(
+        addr: T,
+        module: RadioModule,
+        config_channel: Option<Receiver<RadioConfig>>,
+    ) -> Self {
         Self {
             addr: addr.into(),
             module,
+            config_channel: Arc::new(Mutex::new(config_channel)),
         }
     }
 
@@ -44,6 +52,8 @@ impl KaonicGrpc {
         let (rx_channel, tx_channel) = context.channel.split();
 
         let tx_channel = Arc::new(tokio::sync::Mutex::new(tx_channel));
+
+        let config_channel = context.inner.lock().unwrap().config_channel.clone();
 
         loop {
             if context.cancel.is_cancelled() {
@@ -122,6 +132,36 @@ impl KaonicGrpc {
                     stop.cancel();
                 })
             };
+
+            if config_channel.lock().await.is_some() {
+                let _config_task = {
+                    let mut radio_client = radio_client.clone();
+                    let cancel = cancel.clone();
+                    let stop = stop.clone();
+                    let config_channel = config_channel.clone();
+
+                    tokio::spawn(async move {
+                        loop {
+                            let mut config_channel = config_channel.lock().await;
+
+                            tokio::select! {
+                                _ = cancel.cancelled() => {
+                                        break;
+                                },
+                                _ = stop.cancelled() => {
+                                        break;
+                                },
+                                Some(config) = config_channel.as_mut().unwrap().recv() => {
+                                    log::warn!("kaonic_grpc: change config");
+                                    if let Err(_) = radio_client.configure(config).await {
+                                        log::error!("kaonic_grpc: config error");
+                                    }
+                                }
+                            }
+                        }
+                    })
+                };
+            }
 
             let tx_task = {
                 let cancel = cancel.clone();

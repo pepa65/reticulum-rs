@@ -28,7 +28,7 @@ async fn main() {
     log::info!("start kaonic client");
 
     let _ = transport.lock().await.iface_manager().lock().await.spawn(
-        KaonicGrpc::new(format!("http://{}", grpc_addr), RadioModule::RadioA),
+        KaonicGrpc::new(format!("http://{}", grpc_addr), RadioModule::RadioA, None),
         KaonicGrpc::spawn,
     );
 
