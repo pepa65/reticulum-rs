@@ -209,6 +209,7 @@ impl Transport {
         let mut count = 0usize;
         for link in handler.in_links.values() {
             let link = link.lock().await;
+
             if link.destination().address_hash == *destination
                 && link.status() == LinkStatus::Active
             {
@@ -492,6 +493,10 @@ async fn handle_check_links<'a>(mut handler: MutexGuard<'a, TransportHandler>) {
 
     for link_entry in &handler.out_links {
         let mut link = link_entry.1.lock().await;
+
+        if link.status() == LinkStatus::Active && link.elapsed() > Duration::from_secs(10) {
+            link.restart();
+        }
 
         if link.status() == LinkStatus::Pending {
             if link.elapsed() > Duration::from_secs(5) {
