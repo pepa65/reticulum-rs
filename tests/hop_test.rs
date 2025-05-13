@@ -1,15 +1,20 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
+use rand_core::OsRng;
 use reticulum::{
     destination::DestinationName,
     identity::PrivateIdentity,
     iface::{tcp_client::TcpClient, tcp_server::TcpServer},
     transport::{Transport, TransportConfig},
 };
-use tokio::{sync::Mutex, time};
+use tokio::time;
 
 async fn build_transport(name: &str, server_addr: &str, client_addr: &[&str]) -> Transport {
-    let transport = Transport::new(TransportConfig::new(name, true));
+    let transport = Transport::new(TransportConfig::new(
+        name,
+        &PrivateIdentity::new_from_rand(OsRng),
+        true,
+    ));
 
     transport.iface_manager().lock().await.spawn(
         TcpServer::new(server_addr, transport.iface_manager()),

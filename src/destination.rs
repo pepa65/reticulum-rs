@@ -1,4 +1,5 @@
 pub mod link;
+pub mod link_map;
 
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey, SIGNATURE_LENGTH};
 use rand_core::CryptoRngCore;
@@ -111,7 +112,7 @@ impl fmt::Display for DestinationDesc {
 pub type DestinationAnnounce = Packet;
 
 impl DestinationAnnounce {
-    pub fn validate(packet: &Packet) -> Result<SingleOutputDestination, RnsError> {
+    pub fn validate(packet: &Packet) -> Result<(SingleOutputDestination, &[u8]), RnsError> {
         if packet.header.packet_type != PacketType::Announce {
             return Err(RnsError::PacketError);
         }
@@ -166,9 +167,9 @@ impl DestinationAnnounce {
 
         identity.verify(signed_data.as_slice(), &signature)?;
 
-        Ok(SingleOutputDestination::new(
-            identity,
-            DestinationName::new_from_hash_slice(name_hash),
+        Ok((
+            SingleOutputDestination::new(identity, DestinationName::new_from_hash_slice(name_hash)),
+            app_data,
         ))
     }
 }

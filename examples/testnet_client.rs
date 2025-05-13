@@ -35,11 +35,9 @@ async fn main() {
                     _ = cancel.cancelled() => {
                         break;
                     },
-                    Ok(destination) = announce.recv() => {
-                        let destination = destination.lock().await;
+                    Ok(announce) = announce.recv() => {
+                        let destination = announce.destination.lock().await;
                         log::debug!("new announce {}", destination.desc.address_hash);
-
-                        // let link = transport.lock().await.link(destination.desc).await;
                     },
                 }
             }

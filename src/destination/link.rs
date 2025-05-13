@@ -440,7 +440,11 @@ impl Link {
     }
 
     pub fn restart(&mut self) {
-        log::warn!("link({}): restart", self.id);
+        log::warn!(
+            "link({}): restart after {}s",
+            self.id,
+            self.request_time.elapsed().as_secs()
+        );
 
         self.status = LinkStatus::Pending;
     }

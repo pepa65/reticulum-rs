@@ -7,10 +7,9 @@ use std::time::Duration;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
 
+use tokio::sync::broadcast;
 use tokio::sync::Mutex;
 use tokio::sync::MutexGuard;
-
-use tokio::sync::broadcast;
 
 use crate::destination::link::Link;
 use crate::destination::link::LinkEventData;
@@ -22,13 +21,17 @@ use crate::destination::DestinationHandleStatus;
 use crate::destination::DestinationName;
 use crate::destination::SingleInputDestination;
 use crate::destination::SingleOutputDestination;
+
 use crate::hash::AddressHash;
 use crate::identity::PrivateIdentity;
+
 use crate::iface::InterfaceManager;
 use crate::iface::InterfaceRxReceiver;
 use crate::iface::TxMessage;
 use crate::iface::TxMessageType;
+
 use crate::packet::DestinationType;
+use crate::packet::PacketDataBuffer;
 use crate::packet::{Packet, PacketType};
 
 // TODO: Configure via features
@@ -37,14 +40,19 @@ pub const PATHFINDER_M: usize = 128; // Max hops
 
 pub struct TransportConfig {
     name: String,
-    identity: PrivateIdentity,
+    _identity: PrivateIdentity,
     broadcast: bool,
+}
+#[derive(Clone)]
+pub struct AnnounceEvent {
+    pub destination: Arc<Mutex<SingleOutputDestination>>,
+    pub app_data: PacketDataBuffer,
 }
 
 struct TransportHandler {
     config: TransportConfig,
     iface_manager: Arc<Mutex<InterfaceManager>>,
-    out_destination_tx: broadcast::Sender<Arc<Mutex<SingleOutputDestination>>>,
+    announce_tx: broadcast::Sender<AnnounceEvent>,
 
     single_in_destinations: HashMap<AddressHash, Arc<Mutex<SingleInputDestination>>>,
     single_out_destinations: HashMap<AddressHash, Arc<Mutex<SingleOutputDestination>>>,
@@ -70,7 +78,7 @@ impl TransportConfig {
     pub fn new<T: Into<String>>(name: T, identity: &PrivateIdentity, broadcast: bool) -> Self {
         Self {
             name: name.into(),
-            identity: identity.clone(),
+            _identity: identity.clone(),
             broadcast,
         }
     }
@@ -80,7 +88,7 @@ impl Default for TransportConfig {
     fn default() -> Self {
         Self {
             name: "tp".into(),
-            identity: PrivateIdentity::new_from_rand(OsRng),
+            _identity: PrivateIdentity::new_from_rand(OsRng),
             broadcast: false,
         }
     }
@@ -88,7 +96,7 @@ impl Default for TransportConfig {
 
 impl Transport {
     pub fn new(config: TransportConfig) -> Self {
-        let (out_destination_tx, _) = tokio::sync::broadcast::channel(16);
+        let (announce_tx, _) = tokio::sync::broadcast::channel(16);
         let (link_in_event_tx, _) = tokio::sync::broadcast::channel(16);
         let (link_out_event_tx, _) = tokio::sync::broadcast::channel(16);
 
@@ -107,7 +115,7 @@ impl Transport {
             single_out_destinations: HashMap::new(),
             out_links: HashMap::new(),
             in_links: HashMap::new(),
-            out_destination_tx,
+            announce_tx,
             link_in_event_tx: link_in_event_tx.clone(),
             cancel: cancel.clone(),
         }));
@@ -131,8 +139,8 @@ impl Transport {
         self.iface_manager.clone()
     }
 
-    pub async fn recv_announces(&self) -> broadcast::Receiver<Arc<Mutex<SingleOutputDestination>>> {
-        self.handler.lock().await.out_destination_tx.subscribe()
+    pub async fn recv_announces(&self) -> broadcast::Receiver<AnnounceEvent> {
+        self.handler.lock().await.announce_tx.subscribe()
     }
 
     pub async fn send_packet(&self, packet: Packet) {
@@ -230,8 +238,12 @@ impl Transport {
         }
     }
 
-    pub async fn find_out_link(&self, address: AddressHash) -> Option<Arc<Mutex<Link>>> {
-        self.handler.lock().await.out_links.get(&address).cloned()
+    pub async fn find_out_link(&self, link_id: &AddressHash) -> Option<Arc<Mutex<Link>>> {
+        self.handler.lock().await.out_links.get(link_id).cloned()
+    }
+
+    pub async fn find_in_link(&self, link_id: &AddressHash) -> Option<Arc<Mutex<Link>>> {
+        self.handler.lock().await.in_links.get(link_id).cloned()
     }
 
     pub async fn link(&self, destination: DestinationDesc) -> Arc<Mutex<Link>> {
@@ -392,7 +404,9 @@ async fn handle_data<'a>(packet: &Packet, handler: MutexGuard<'a, TransportHandl
 }
 
 async fn handle_announce<'a>(packet: &Packet, mut handler: MutexGuard<'a, TransportHandler>) {
-    if let Ok(destination) = DestinationAnnounce::validate(packet) {
+    if let Ok(result) = DestinationAnnounce::validate(packet) {
+        let destination = result.0;
+        let app_data = result.1;
         let destination = Arc::new(Mutex::new(destination));
 
         if !handler
@@ -410,7 +424,10 @@ async fn handle_announce<'a>(packet: &Packet, mut handler: MutexGuard<'a, Transp
                 .insert(packet.destination, destination.clone());
         }
 
-        let _ = handler.out_destination_tx.send(destination);
+        let _ = handler.announce_tx.send(AnnounceEvent {
+            destination,
+            app_data: PacketDataBuffer::new_from_slice(&app_data),
+        });
     }
 }
 
@@ -494,7 +511,7 @@ async fn handle_check_links<'a>(mut handler: MutexGuard<'a, TransportHandler>) {
     for link_entry in &handler.out_links {
         let mut link = link_entry.1.lock().await;
 
-        if link.status() == LinkStatus::Active && link.elapsed() > Duration::from_secs(10) {
+        if link.status() == LinkStatus::Active && link.elapsed() > Duration::from_secs(30) {
             link.restart();
         }
 
