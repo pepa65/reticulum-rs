@@ -6,7 +6,7 @@ use rand_core::OsRng;
 use reticulum::destination::DestinationName;
 use reticulum::identity::PrivateIdentity;
 use reticulum::iface::kaonic::kaonic_grpc::KaonicGrpc;
-use reticulum::iface::kaonic::RadioModule;
+use reticulum::iface::kaonic::{RadioConfig, RadioModule};
 use reticulum::transport::{Transport, TransportConfig};
 use tokio::sync::Mutex;
 
@@ -28,7 +28,11 @@ async fn main() {
     log::info!("start kaonic client");
 
     let _ = transport.lock().await.iface_manager().lock().await.spawn(
-        KaonicGrpc::new(format!("http://{}", grpc_addr), RadioModule::RadioA, None),
+        KaonicGrpc::new(
+            format!("http://{}", grpc_addr),
+            RadioConfig::new_for_module(RadioModule::RadioA),
+            None,
+        ),
         KaonicGrpc::spawn,
     );
 

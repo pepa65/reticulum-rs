@@ -22,30 +22,32 @@ use crate::serde::Serialize;
 
 use alloc::string::String;
 
-use super::{RadioConfig, RadioModule};
+use super::RadioConfig;
+
+pub const KAONIC_GRPC_URL: &str = "http://192.168.10.1:8080";
 
 pub struct KaonicGrpc {
     addr: String,
-    module: RadioModule,
+    config: Arc<Mutex<RadioConfig>>,
     config_channel: Arc<Mutex<Option<Receiver<RadioConfig>>>>,
 }
 
 impl KaonicGrpc {
     pub fn new<T: Into<String>>(
         addr: T,
-        module: RadioModule,
+        config: RadioConfig,
         config_channel: Option<Receiver<RadioConfig>>,
     ) -> Self {
         Self {
             addr: addr.into(),
-            module,
+            config: Arc::new(Mutex::new(config)),
             config_channel: Arc::new(Mutex::new(config_channel)),
         }
     }
 
     pub async fn spawn(context: InterfaceContext<Self>) {
         let addr = { context.inner.lock().unwrap().addr.clone() };
-        let module = { context.inner.lock().unwrap().module };
+        let current_config = { context.inner.lock().unwrap().config.clone() };
 
         let iface_address = context.channel.address;
 
@@ -79,7 +81,7 @@ impl KaonicGrpc {
 
             let mut recv_stream = radio_client
                 .receive_stream(proto::ReceiveRequest {
-                    module: module as i32,
+                    module: 0, // Currently not used by kaonic-commd
                     timeout: 0,
                 })
                 .await
@@ -139,6 +141,7 @@ impl KaonicGrpc {
                     let cancel = cancel.clone();
                     let stop = stop.clone();
                     let config_channel = config_channel.clone();
+                    let current_config = current_config.clone();
 
                     tokio::spawn(async move {
                         loop {
@@ -153,7 +156,11 @@ impl KaonicGrpc {
                                 },
                                 Some(config) = config_channel.as_mut().unwrap().recv() => {
                                     log::warn!("kaonic_grpc: change config");
-                                    if let Err(_) = radio_client.configure(config).await {
+                                    if let Ok(_) = radio_client.configure(config).await {
+                                        let mut current_config = current_config.lock().await;
+                                        *current_config = config;
+                                        log::info!("kaonic_grpc: config has been changed");
+                                    } else {
                                         log::error!("kaonic_grpc: config error");
                                     }
                                 }
@@ -167,6 +174,7 @@ impl KaonicGrpc {
                 let cancel = cancel.clone();
                 let stop = stop.clone();
                 let tx_channel = tx_channel.clone();
+                let current_config = current_config.clone();
 
                 tokio::spawn(async move {
                     let mut tx_buffer = [0u8; BUFFER_SIZE];
@@ -188,8 +196,10 @@ impl KaonicGrpc {
 
                                     let frame = encode_buffer_to_frame(output.as_mut_slice());
 
+                                    let module = current_config.lock().await.module;
+
                                     let result = radio_client.transmit(proto::TransmitRequest{
-                                        module: module as i32,
+                                        module: module,
                                         frame: Some(frame),
                                     }).await;
 
