@@ -187,6 +187,19 @@ impl Transport {
             .await;
     }
 
+    pub async fn send_to_all_out_links(&self, payload: &[u8]) {
+        let handler = self.handler.lock().await;
+        for link in handler.out_links.values() {
+            let link = link.lock().await;
+            if link.status() == LinkStatus::Active {
+                let packet = link.data_packet(payload);
+                if let Ok(packet) = packet {
+                    handler.send_packet(packet).await;
+                }
+            }
+        }
+    }
+
     pub async fn send_to_out_links(&self, destination: &AddressHash, payload: &[u8]) {
         let mut count = 0usize;
         let handler = self.handler.lock().await;
