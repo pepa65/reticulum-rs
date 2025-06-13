@@ -203,7 +203,7 @@ impl fmt::Display for Header {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{:b}{:b}{:0>2b}{:0>2b}{:0>2b}{:0>8b}",
+            "{:b}{:b}{:0>2b}{:0>2b}{:0>2b}.{}",
             self.ifac_flag as u8,
             self.header_type as u8,
             self.propagation_type as u8,
