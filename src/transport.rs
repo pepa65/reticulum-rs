@@ -411,8 +411,7 @@ async fn handle_data<'a>(packet: &Packet, handler: MutexGuard<'a, TransportHandl
             let result = link.handle_packet(packet);
             match result {
                 LinkHandleResult::KeepAlive => {
-                    let packet = link.keep_alive_packet(0xFE);
-                    handler.send_packet(packet).await;
+                    handler.send_packet(link.keep_alive_packet(0xFE)).await;
                 }
                 _ => {}
             }
@@ -532,7 +531,7 @@ async fn handle_check_links<'a>(mut handler: MutexGuard<'a, TransportHandler>) {
 
     for link_entry in &handler.in_links {
         let mut link = link_entry.1.lock().await;
-        if link.elapsed() > Duration::from_secs(10) {
+        if link.elapsed() > Duration::from_secs(30) {
             link.close();
             links_to_remove.push(*link_entry.0);
         }
@@ -641,7 +640,7 @@ async fn manage_transport(
 
                         let handler = handler.lock().await;
 
-                        let is_new_packet = handler.packet_cache.lock().await.update(&packet);
+                        let is_new_packet = true; // handler.packet_cache.lock().await.update(&packet);
 
                         if is_new_packet {
                             if PACKET_TRACE {
@@ -731,7 +730,7 @@ async fn manage_transport(
                     _ = cancel.cancelled() => {
                         break;
                     },
-                    _ = time::sleep(Duration::from_secs(10)) => {
+                    _ = time::sleep(Duration::from_secs(5)) => {
                         handle_keep_links(handler.lock().await).await;
                     }
                 }
