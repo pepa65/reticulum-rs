@@ -1,4 +1,4 @@
-use std::{collections::HashMap, ops::Add, time::Instant};
+use std::{collections::HashMap, time::Instant};
 
 use crate::{
     hash::{AddressHash, Hash},

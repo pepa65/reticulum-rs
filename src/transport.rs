@@ -3,7 +3,6 @@ use packet_cache::PacketCache;
 use path_table::PathTable;
 use rand_core::OsRng;
 use std::collections::HashMap;
-use std::path::is_separator;
 use std::time::Duration;
 use tokio::time;
 use tokio_util::sync::CancellationToken;
@@ -34,7 +33,6 @@ use crate::iface::TxMessageType;
 
 use crate::packet::DestinationType;
 use crate::packet::Header;
-use crate::packet::HeaderType;
 use crate::packet::PacketDataBuffer;
 use crate::packet::{Packet, PacketType};
 

@@ -973,6 +973,7 @@ dependencies = [
  "prost",
  "rand_core",
  "rmp",
+ "serde",
  "sha2",
  "tokio",
  "tokio-stream",

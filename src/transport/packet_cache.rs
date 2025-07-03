@@ -1,15 +1,10 @@
 use std::{
-    cmp::{min, min_by},
+    cmp::min,
     collections::HashMap,
-    sync::Mutex,
     time::{Duration, Instant},
 };
 
-use crate::{
-    hash::Hash,
-    packet::{self, Packet},
-    utils::cache_set::CacheSet,
-};
+use crate::{hash::Hash, packet::Packet};
 
 pub struct PacketTrack {
     pub time: Instant,
