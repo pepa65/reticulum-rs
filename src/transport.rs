@@ -43,6 +43,13 @@ mod path_table;
 const PACKET_TRACE: bool = true;
 pub const PATHFINDER_M: usize = 128; // Max hops
 
+const INTERVAL_LINKS_CHECK: Duration = Duration::from_secs(1);
+const INTERVAL_INPUT_LINK_CLEANUP: Duration = Duration::from_secs(20);
+const INTERVAL_OUTPUT_LINK_RESTART: Duration = Duration::from_secs(12);
+const INTERVAL_OUTPUT_LINK_REPEAT: Duration = Duration::from_secs(6);
+const INTERVAL_OUTPUT_LINK_KEEP: Duration = Duration::from_secs(5);
+const INTERVAL_IFACE_CLEANUP: Duration = Duration::from_secs(10);
+
 pub struct TransportConfig {
     name: String,
     identity: PrivateIdentity,
@@ -238,7 +245,7 @@ impl Transport {
         }
 
         if count == 0 {
-            log::warn!(
+            log::trace!(
                 "tp({}): no output links for {} destination",
                 self.name,
                 destination
@@ -264,7 +271,7 @@ impl Transport {
         }
 
         if count == 0 {
-            log::warn!(
+            log::trace!(
                 "tp({}): no input links for {} destination",
                 self.name,
                 destination
@@ -527,9 +534,10 @@ async fn handle_link_request<'a>(packet: &Packet, mut handler: MutexGuard<'a, Tr
 async fn handle_check_links<'a>(mut handler: MutexGuard<'a, TransportHandler>) {
     let mut links_to_remove: Vec<AddressHash> = Vec::new();
 
+    // Clean up input links
     for link_entry in &handler.in_links {
         let mut link = link_entry.1.lock().await;
-        if link.elapsed() > Duration::from_secs(30) {
+        if link.elapsed() > INTERVAL_INPUT_LINK_CLEANUP {
             link.close();
             links_to_remove.push(*link_entry.0);
         }
@@ -556,12 +564,12 @@ async fn handle_check_links<'a>(mut handler: MutexGuard<'a, TransportHandler>) {
     for link_entry in &handler.out_links {
         let mut link = link_entry.1.lock().await;
 
-        if link.status() == LinkStatus::Active && link.elapsed() > Duration::from_secs(45) {
+        if link.status() == LinkStatus::Active && link.elapsed() > INTERVAL_OUTPUT_LINK_RESTART {
             link.restart();
         }
 
         if link.status() == LinkStatus::Pending {
-            if link.elapsed() > Duration::from_secs(20) {
+            if link.elapsed() > INTERVAL_OUTPUT_LINK_REPEAT {
                 log::warn!(
                     "tp({}): repeat link request {}",
                     handler.config.name,
@@ -638,31 +646,20 @@ async fn manage_transport(
 
                         let handler = handler.lock().await;
 
-                        let is_new_packet = true; // handler.packet_cache.lock().await.update(&packet);
+                        if PACKET_TRACE {
+                            log::trace!("tp: << rx({}) = {} {}", message.address, packet, packet.hash());
+                        }
 
-                        if is_new_packet {
-                            if PACKET_TRACE {
-                                log::trace!("tp: << rx({}) = {} {}", message.address, packet, packet.hash());
-                            }
+                        if handler.config.broadcast {
+                            // Send broadcast message expect current iface address
+                            handler.send(TxMessage { tx_type: TxMessageType::Broadcast(Some(message.address)), packet }).await;
+                        }
 
-                            if handler.config.retransmit {
-
-                                let new_packet = create_retransmit_packet(&packet);
-
-                                // Retransmit to all interfaces including incoming
-                                handler.send(TxMessage { tx_type: TxMessageType::Broadcast(None), packet: new_packet }).await;
-                            }
-
-                            if handler.config.broadcast && is_new_packet {
-                                handler.send(TxMessage { tx_type: TxMessageType::Broadcast(Some(message.address)), packet }).await;
-                            }
-
-                            match packet.header.packet_type {
-                                PacketType::Announce => handle_announce(&packet, handler).await,
-                                PacketType::LinkRequest => handle_link_request(&packet, handler).await,
-                                PacketType::Proof => handle_proof(&packet, handler).await,
-                                PacketType::Data => handle_data(&packet, handler).await,
-                            }
+                        match packet.header.packet_type {
+                            PacketType::Announce => handle_announce(&packet, handler).await,
+                            PacketType::LinkRequest => handle_link_request(&packet, handler).await,
+                            PacketType::Proof => handle_proof(&packet, handler).await,
+                            PacketType::Data => handle_data(&packet, handler).await,
                         }
                     }
                 };
@@ -684,7 +681,7 @@ async fn manage_transport(
                     _ = cancel.cancelled() => {
                         break;
                     },
-                    _ = time::sleep(Duration::from_secs(5)) => {
+                    _ = time::sleep(INTERVAL_LINKS_CHECK) => {
                         handle_check_links(handler.lock().await).await;
                     }
                 }
@@ -728,7 +725,7 @@ async fn manage_transport(
                     _ = cancel.cancelled() => {
                         break;
                     },
-                    _ = time::sleep(Duration::from_secs(5)) => {
+                    _ = time::sleep(INTERVAL_OUTPUT_LINK_KEEP) => {
                         handle_keep_links(handler.lock().await).await;
                     }
                 }
@@ -750,7 +747,7 @@ async fn manage_transport(
                     _ = cancel.cancelled() => {
                         break;
                     },
-                    _ = time::sleep(Duration::from_secs(30)) => {
+                    _ = time::sleep(INTERVAL_IFACE_CLEANUP) => {
                         handle_cleanup(handler.lock().await).await;
                     }
                 }
