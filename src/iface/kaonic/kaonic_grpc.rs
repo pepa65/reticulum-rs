@@ -99,6 +99,7 @@ impl KaonicGrpc {
                 let cancel = cancel.clone();
                 let stop = stop.clone();
                 let rx_channel = rx_channel.clone();
+                let current_config = current_config.clone();
 
                 tokio::spawn(async move {
                     let mut rx_buffer = [0u8; BUFFER_SIZE];
@@ -116,7 +117,8 @@ impl KaonicGrpc {
                             Some(result) = recv_stream.next() => {
                                 if let Ok(response) = result {
                                     if let Some(frame) = response.frame {
-                                        if frame.length > 0 {
+                                        let module = current_config.lock().await.module;
+                                        if frame.length > 0 && response.module == module {
                                             if let Ok(buf) = decode_frame_to_buffer(&frame, &mut rx_buffer[..]) {
                                                 if let Ok(packet) = Packet::deserialize(&mut InputBuffer::new(buf)) {
                                                         let _ = rx_channel.send(RxMessage { address: iface_address, packet }).await;
