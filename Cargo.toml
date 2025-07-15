@@ -1,11 +1,42 @@
 [package]
 name = "reticulum"
-version = "0.1.0"
-edition = "2021"
+version = "0.2.0"
+edition = "2024"
+authors = ["github.com/", "github.com/pepa65 <pepa65@passchier.net>"]
+description = "Reticulum in Rust"
+repository = "https://github.com/pepa65/reticulum-rs"
+readme = "README.md"
 license = "MIT"
 
-[dependencies]
+[[bin]]
+name = "kaonic-client"
+path = "examples/kaonic_client.rs"
 
+[[bin]]
+name = "kaonic-mesh"
+path = "examples/kaonic_mesh.rs"
+
+[[bin]]
+name = "kaonic-tcp-mesh"
+path = "examples/kaonic_tcp_mesh.rs"
+
+[[bin]]
+name = "link-client"
+path = "examples/link_client.rs"
+
+[[bin]]
+name = "tcp-client"
+path = "examples/tcp_client.rs"
+
+[[bin]]
+name = "tcp-server"
+path = "examples/tcp_server.rs"
+
+[[bin]]
+name = "testnet-client"
+path = "examples/testnet_client.rs"
+
+[dependencies]
 # Protobuf and gRPC
 tonic = "0.13.0"
 prost = "0.13.5"
@@ -43,31 +74,3 @@ alloc = []
 
 [build-dependencies]
 tonic-build = "0.13.0"
-
-[[example]]
-name = "tcp-server"
-path = "examples/tcp_server.rs"
-
-[[example]]
-name = "tcp-client"
-path = "examples/tcp_client.rs"
-
-[[example]]
-name = "link-client"
-path = "examples/link_client.rs"
-
-[[example]]
-name = "kaonic-client"
-path = "examples/kaonic_client.rs"
-
-[[example]]
-name = "testnet-client"
-path = "examples/testnet_client.rs"
-
-[[example]]
-name = "kaonic-tcp-mesh"
-path = "examples/kaonic_tcp_mesh.rs"
-
-[[example]]
-name = "kaonic-mesh"
-path = "examples/kaonic_mesh.rs"

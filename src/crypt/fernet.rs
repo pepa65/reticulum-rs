@@ -14,13 +14,13 @@ use sha2::Sha256;
 
 use crate::error::RnsError;
 
-type Aes128CbcEnc = cbc::Encryptor<aes::Aes128>;
-type Aes128CbcDec = cbc::Decryptor<aes::Aes128>;
+type Aes256CbcEnc = cbc::Encryptor<aes::Aes256>;
+type Aes256CbcDec = cbc::Decryptor<aes::Aes256>;
 type HmacSha256 = Hmac<Sha256>;
 
 const HMAC_OUT_SIZE: usize = <<HmacSha256 as OutputSizeUser>::OutputSize as Unsigned>::USIZE;
-const AES_KEY_SIZE: usize = <<aes::Aes128 as KeySizeUser>::KeySize as Unsigned>::USIZE;
-const IV_KEY_SIZE: usize = <<Aes128CbcEnc as IvSizeUser>::IvSize as Unsigned>::USIZE;
+const AES_KEY_SIZE: usize = <<aes::Aes256 as KeySizeUser>::KeySize as Unsigned>::USIZE;
+const IV_KEY_SIZE: usize = <<Aes256CbcEnc as IvSizeUser>::IvSize as Unsigned>::USIZE;
 const FERNET_OVERHEAD_SIZE: usize = IV_KEY_SIZE + HMAC_OUT_SIZE;
 
 pub struct PlainText<'a>(&'a [u8]);
@@ -37,7 +37,7 @@ pub struct Token<'a>(&'a [u8]);
 pub struct Fernet<R: CryptoRngCore> {
     rng: R,
     sign_key: [u8; 16],
-    enc_key: Key<aes::Aes128>,
+    enc_key: Key<aes::Aes256>,
 }
 
 impl<'a> PlainText<'a> {
@@ -74,7 +74,7 @@ impl<'a> From<&'a [u8]> for Token<'a> {
 }
 
 impl<R: CryptoRngCore + Copy> Fernet<R> {
-    pub fn new(sign_key: [u8; 16], enc_key: Key<aes::Aes128>, rng: R) -> Self {
+    pub fn new(sign_key: [u8; 16], enc_key: Key<aes::Aes256>, rng: R) -> Self {
         Self {
             rng,
             sign_key,
@@ -99,7 +99,7 @@ impl<R: CryptoRngCore + Copy> Fernet<R> {
     pub fn new_rand(mut rng: R) -> Self {
         let mut sign_key = [0u8; 16];
         rng.fill_bytes(&mut sign_key);
-        let enc_key = Aes128CbcEnc::generate_key(&mut rng);
+        let enc_key = Aes256CbcEnc::generate_key(&mut rng);
 
         Self {
             rng,
@@ -120,12 +120,12 @@ impl<R: CryptoRngCore + Copy> Fernet<R> {
         let mut out_len = 0;
 
         // Generate random IV
-        let iv = Aes128CbcEnc::generate_iv(self.rng);
+        let iv = Aes256CbcEnc::generate_iv(self.rng);
         out_buf[..iv.len()].copy_from_slice(iv.as_slice());
 
         out_len += iv.len();
 
-        let chiper_len = Aes128CbcEnc::new(&self.enc_key, &iv)
+        let chiper_len = Aes256CbcEnc::new(&self.enc_key, &iv)
             .encrypt_padded_b2b_mut::<Pkcs7>(text.0, &mut out_buf[out_len..])
             .unwrap()
             .len();
@@ -195,7 +195,7 @@ impl<R: CryptoRngCore + Copy> Fernet<R> {
 
         let ciphertext = &token_data[IV_KEY_SIZE..tag_start_index];
 
-        let msg = Aes128CbcDec::new(&self.enc_key, &iv.into())
+        let msg = Aes256CbcDec::new(&self.enc_key, &iv.into())
             .decrypt_padded_b2b_mut::<Pkcs7>(ciphertext, out_buf)
             .map_err(|_| RnsError::CryptoError)?;
 

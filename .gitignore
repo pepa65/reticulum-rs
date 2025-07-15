@@ -1,7 +1,8 @@
-.cache
-**/.DS_Store
-
 /target
-
-.vscode
-
+/kaonic-client
+/kaonic-mesh
+/kaonic-tcp-mesh
+/link-client
+/tcp-client
+/tcp-server
+/testnet-client
