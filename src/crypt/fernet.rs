@@ -1,10 +1,10 @@
 use core::cmp;
 use core::convert::From;
 
-use aes::cipher::block_padding::Pkcs7;
 use aes::cipher::BlockDecryptMut;
 use aes::cipher::Key;
 use aes::cipher::Unsigned;
+use aes::cipher::block_padding::Pkcs7;
 use cbc::cipher::BlockEncryptMut;
 use cbc::cipher::KeyIvInit;
 use crypto_common::{IvSizeUser, KeySizeUser, OutputSizeUser};
@@ -36,7 +36,7 @@ pub struct Token<'a>(&'a [u8]);
 // implementation, since they incur overhead and leak initiator metadata.
 pub struct Fernet<R: CryptoRngCore> {
     rng: R,
-    sign_key: [u8; 16],
+    sign_key: [u8; AES_KEY_SIZE],
     enc_key: Key<aes::Aes256>,
 }
 
@@ -74,7 +74,7 @@ impl<'a> From<&'a [u8]> for Token<'a> {
 }
 
 impl<R: CryptoRngCore + Copy> Fernet<R> {
-    pub fn new(sign_key: [u8; 16], enc_key: Key<aes::Aes256>, rng: R) -> Self {
+    pub fn new(sign_key: [u8; AES_KEY_SIZE], enc_key: Key<aes::Aes256>, rng: R) -> Self {
         Self {
             rng,
             sign_key,
@@ -83,8 +83,8 @@ impl<R: CryptoRngCore + Copy> Fernet<R> {
     }
 
     pub fn new_from_slices(sign_key: &[u8], enc_key: &[u8], rng: R) -> Self {
-        let mut sign_key_bytes = [0u8; 16];
-        sign_key_bytes[..cmp::min(16, sign_key.len())].copy_from_slice(sign_key);
+        let mut sign_key_bytes = [0u8; AES_KEY_SIZE];
+        sign_key_bytes[..cmp::min(AES_KEY_SIZE, sign_key.len())].copy_from_slice(sign_key);
 
         let mut enc_key_bytes = [0u8; AES_KEY_SIZE];
         enc_key_bytes[..cmp::min(AES_KEY_SIZE, enc_key.len())].copy_from_slice(enc_key);
@@ -97,7 +97,7 @@ impl<R: CryptoRngCore + Copy> Fernet<R> {
     }
 
     pub fn new_rand(mut rng: R) -> Self {
-        let mut sign_key = [0u8; 16];
+        let mut sign_key = [0u8; AES_KEY_SIZE];
         rng.fill_bytes(&mut sign_key);
         let enc_key = Aes256CbcEnc::generate_key(&mut rng);
 
