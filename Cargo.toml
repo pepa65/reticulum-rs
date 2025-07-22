@@ -1,6 +1,6 @@
 [package]
 name = "reticulum"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2024"
 authors = ["github.com/", "github.com/pepa65 <pepa65@passchier.net>"]
 description = "Reticulum in Rust"
@@ -39,7 +39,7 @@ path = "examples/testnet_client.rs"
 [dependencies]
 # Protobuf and gRPC
 tonic = "0.13.0"
-prost = "0.13.5"
+prost = "0.13"
 
 # Crypto
 crypto-common = { version = "0.1.6", features = ["rand_core"] }
@@ -54,7 +54,7 @@ hmac = "0.12.1"
 sha2 = "0.10.8"
 
 # Random Number generator
-rand_core = { version = "0.6.4", features = ["getrandom"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 # Async IO
 tokio = { version = "1.44.2", features = ["full"] }
