@@ -1,8 +1,8 @@
 [package]
 name = "reticulum"
-version = "0.2.2"
+version = "0.2.3"
 edition = "2024"
-authors = ["github.com/", "github.com/pepa65 <pepa65@passchier.net>"]
+authors = ["github.com/BeechatNetworkSystemsLtd", "github.com/pepa65"]
 description = "Reticulum in Rust"
 repository = "https://github.com/pepa65/reticulum-rs"
 readme = "README.md"
@@ -66,7 +66,7 @@ serde = { version = "1.0.219", features = ["derive"] }
 
 # Logging
 log = "0.4.27"
-env_logger = "0.10"
+env_logger = "0.11"
 
 [features]
 default = ["alloc"]
