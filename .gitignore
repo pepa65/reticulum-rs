@@ -2,6 +2,7 @@
 /kaonic-client
 /kaonic-mesh
 /kaonic-tcp-mesh
+/udp-link
 /link-client
 /tcp-client
 /tcp-server

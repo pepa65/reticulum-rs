@@ -1,6 +1,5 @@
 [alias]
 rel = "build --release"
-#rel = "build --release --example kaonic-tcp-mesh --example tcp-client --example kaonic-client --example kaonic-mesh --example link-client --example tcp-server --example testnet-client"
 inst = "install --path ."
 clip = "clippy --release"
 pub = "publish"
