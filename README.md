@@ -1,4 +1,4 @@
-# Reticulum-rs 0.3.3
+# Reticulum-rs 0.3.4
 **Reticulum-rs** is a Rust implementation of the [Reticulum Network Stack](https://reticulum.network/)
 — a cryptographic, decentralised, and resilient mesh networking protocol designed for communication over any physical layer.
 
