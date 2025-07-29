@@ -1,5 +1,8 @@
-# Reticulum-rs 0.3.4
-**Reticulum-rs** is a Rust implementation of the [Reticulum Network Stack](https://reticulum.network/)
+[![dependencies](https://deps.rs/repo/github/pepa65/reticulum-rs/status.svg)](https://deps.rs/repo/github/pepa65/reticulum-rs)
+[![license](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/pepa65/reticulum-rs/blob/main/LICENSE)
+
+# reticulum-rs 0.3.5
+Package **reticulum-rs** is a Rust implementation of the [Reticulum Network Stack](https://reticulum.network/)
 — a cryptographic, decentralised, and resilient mesh networking protocol designed for communication over any physical layer.
 
 This project brings Reticulum's capabilities to the Rust ecosystem, enabling embedded,
@@ -33,10 +36,6 @@ and constrained deployments with maximum performance and minimal dependencies.
 
 ### Build
 `cargo rel`
-
-### Run Examples
-* `cargo run --example tcp_client`
-* `cargo run --example kaonic_client`
 
 ## Use Cases
 * 🛰 Tactical radio mesh with Kaonic
