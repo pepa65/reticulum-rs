@@ -1,6 +1,6 @@
 [package]
 name = "reticulum"
-version = "0.3.9"
+version = "0.3.10"
 edition = "2024"
 authors = ["github.com/BeechatNetworkSystemsLtd", "github.com/pepa65"]
 description = "Reticulum in Rust"
