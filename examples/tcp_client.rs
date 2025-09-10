@@ -8,29 +8,23 @@ use reticulum::transport::{Transport, TransportConfig};
 
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace")).init();
+	env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace")).init();
 
-    log::info!(">>> TCP CLIENT APP <<<");
+	log::info!(">>> TCP CLIENT APP <<<");
 
-    let transport = Transport::new(TransportConfig::default());
+	let transport = Transport::new(TransportConfig::default());
 
-    let client_addr = transport
-        .iface_manager()
-        .lock()
-        .await
-        .spawn(TcpClient::new("127.0.0.1:4242"), TcpClient::spawn);
+	let client_addr = transport.iface_manager().lock().await.spawn(TcpClient::new("127.0.0.1:4242"), TcpClient::spawn);
 
-    let id = PrivateIdentity::new_from_rand(OsRng);
+	let id = PrivateIdentity::new_from_rand(OsRng);
 
-    let destination = SingleInputDestination::new(id, DestinationName::new("example", "app"));
+	let destination = SingleInputDestination::new(id, DestinationName::new("example", "app"));
 
-    tokio::time::sleep(Duration::from_secs(3)).await;
+	tokio::time::sleep(Duration::from_secs(3)).await;
 
-    transport
-        .send_direct(client_addr, destination.announce(OsRng, None).unwrap())
-        .await;
+	transport.send_direct(client_addr, destination.announce(OsRng, None).unwrap()).await;
 
-    let _ = tokio::signal::ctrl_c().await;
+	let _ = tokio::signal::ctrl_c().await;
 
-    log::info!("exit");
+	log::info!("exit");
 }

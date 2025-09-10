@@ -11,5 +11,5 @@ pub mod iface;
 pub mod packet;
 pub mod transport;
 
-mod utils;
 mod serde;
+mod utils;

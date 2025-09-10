@@ -12,60 +12,45 @@ use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace")).init();
+	env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("trace")).init();
 
-    let args: Vec<String> = env::args().collect();
+	let args: Vec<String> = env::args().collect();
 
-    if args.len() < 2 {
-        println!("Usage: {} <grpc-addr>", args[0]);
-        return;
-    }
+	if args.len() < 2 {
+		println!("Usage: {} <grpc-addr>", args[0]);
+		return;
+	}
 
-    let grpc_addr = &args[1];
+	let grpc_addr = &args[1];
 
-    let transport = Arc::new(Mutex::new(Transport::new(TransportConfig::default())));
+	let transport = Arc::new(Mutex::new(Transport::new(TransportConfig::default())));
 
-    log::info!("start kaonic client");
+	log::info!("start kaonic client");
 
-    let _ = transport.lock().await.iface_manager().lock().await.spawn(
-        KaonicGrpc::new(
-            format!("http://{}", grpc_addr),
-            RadioConfig::new_for_module(RadioModule::RadioA),
-            None,
-        ),
-        KaonicGrpc::spawn,
-    );
+	let _ = transport.lock().await.iface_manager().lock().await.spawn(
+		KaonicGrpc::new(format!("http://{}", grpc_addr), RadioConfig::new_for_module(RadioModule::RadioA), None),
+		KaonicGrpc::spawn,
+	);
 
-    let identity = PrivateIdentity::new_from_name("kaonic-example");
+	let identity = PrivateIdentity::new_from_name("kaonic-example");
 
-    let in_destination = transport
-        .lock()
-        .await
-        .add_destination(
-            identity,
-            DestinationName::new("example_utilities", "linkexample"),
-        )
-        .await;
+	let in_destination = transport.lock().await.add_destination(identity, DestinationName::new("example_utilities", "linkexample")).await;
 
-    // Announce task
-    {
-        let transport = transport.clone();
-        tokio::spawn(async move {
-            loop {
-                log::trace!("announce");
+	// Announce task
+	{
+		let transport = transport.clone();
+		tokio::spawn(async move {
+			loop {
+				log::trace!("announce");
 
-                let _ = transport
-                    .lock()
-                    .await
-                    .send_packet(in_destination.lock().await.announce(OsRng, None).unwrap())
-                    .await;
+				let _ = transport.lock().await.send_packet(in_destination.lock().await.announce(OsRng, None).unwrap()).await;
 
-                tokio::time::sleep(Duration::from_secs(3)).await;
-            }
-        });
-    }
+				tokio::time::sleep(Duration::from_secs(3)).await;
+			}
+		});
+	}
 
-    loop {
-        tokio::time::sleep(Duration::from_secs(10)).await;
-    }
+	loop {
+		tokio::time::sleep(Duration::from_secs(10)).await;
+	}
 }
