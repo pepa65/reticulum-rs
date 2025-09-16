@@ -1,7 +1,7 @@
 [![dependencies](https://deps.rs/repo/github/pepa65/reticulum-rs/status.svg)](https://deps.rs/repo/github/pepa65/reticulum-rs)
 [![license](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/pepa65/reticulum-rs/blob/main/LICENSE)
 
-# reticulum-rs 0.3.23
+# reticulum-rs 0.3.24
 Package **reticulum-rs** is a Rust implementation of the [Reticulum Network Stack](https://reticulum.network/)
 — a cryptographic, decentralised, and resilient mesh networking protocol designed for communication over any physical layer.
 
